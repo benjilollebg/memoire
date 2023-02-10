@@ -97,7 +97,7 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *src_buffer, size_t src_buffer_siz
 
 /*
  * Sample main function
-10 *
+ *
  * @argc [in]: command line arguments size
  * @argv [in]: array of command line arguments
  * @return: EXIT_SUCCESS on success and EXIT_FAILURE otherwise

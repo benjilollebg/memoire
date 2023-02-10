@@ -28,6 +28,8 @@ dependencies += dependency('libdpdk')
 srcs = [
         # The sample itself
         'counter.c',
+	# The dpdk utils (to inititiate the port)
+	'../../../utils/port_init.c',
 ]
 
 executable('counter', srcs,
