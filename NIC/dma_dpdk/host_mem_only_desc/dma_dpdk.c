@@ -63,7 +63,7 @@ DOCA_LOG_REGISTER(DMA_WRITE_DPU);
 struct descriptor
 {
         void*                   buf_addr;
-        uint32_t                pkt_len;
+        int	                pkt_len;
         uint16_t                data_len;
 };
 
@@ -406,6 +406,8 @@ dma_write(struct doca_pci_bdf *pcie_addr, uint16_t port)
                 return result;
         }
 
+
+	int counter = 0;
         /* Main work of application loop */
         for (;;) {
 
@@ -469,22 +471,23 @@ dma_write(struct doca_pci_bdf *pcie_addr, uint16_t port)
                 for (int i = 0; i < nb_rx; i++) {
 			/* Copy data from mbufs to the modified descriptor */
                         descriptors[i].buf_addr = (void *) bufs[i]->buf_addr;
-                        descriptors[i].pkt_len  = bufs[i]->pkt_len;
+//                        descriptors[i].pkt_len  = bufs[i]->pkt_len;
+			descriptors[i].pkt_len  = counter;
                         descriptors[i].data_len = bufs[i]->data_len;
-
+			counter++;
                 	/* Free the mbuf */
                         rte_pktmbuf_free(bufs[i]);
 
 			/* Write the descriptors in the ring */
-			strncpy(&ring[head], (char *) &(descriptors[i]), descriptor_size);
-
+			memcpy(&ring[head*sizeof(struct descriptor)], (char *) &(descriptors[i]), descriptor_size);
+			DOCA_LOG_ERR("ring_desc counter : %d", *((int*) &ring[head*sizeof(struct descriptor)+8]));
 			if (head == DESCRIPTOR_NB - 1)
                                 head = -1;
 			head++;
                 }
 
 		/* Set the new head value */
-		strncpy(&ring[head_pos], (char *) &head, 1);
+		memcpy(&ring[head_pos], (char *) &head, 1);
 
                 printf("\nPort %u forwarded %u packets via DMA for a total of %u packets\n",
                                 port, nb_rx, nb_pakt);
