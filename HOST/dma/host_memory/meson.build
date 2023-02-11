@@ -41,6 +41,8 @@ srcs = [
 	'/opt/mellanox/doca/samples/common.c',
 	# Common code for all DOCA applications
 	'/opt/mellanox/doca/applications/common/src/utils.c',
+	# Common code for all DOCA applications
+        '../../../utils/dma_exchange.c',
 ]
 
 inc_dirs  = []

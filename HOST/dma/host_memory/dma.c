@@ -30,69 +30,12 @@
 #include <utils.h>
 
 #include "dma_common.h"
+#include <../../../utils/dma_exchange.h>
 
 #define IP "192.168.100.2"
 #define PORT 6666
 
 DOCA_LOG_REGISTER(DMA_READ_HOST);
-
-static doca_error_t
-send_data_to_dpu(char *export_desc, size_t export_desc_len, char *src_buffer, size_t src_buffer_size)
-{
-	struct sockaddr_in addr;
-	int sock_fd;
-	uint64_t buffer_addr = (uintptr_t)src_buffer;
-        uint64_t buffer_len = (uint64_t)src_buffer_size;
-
-	char str_buffer_addr[100], str_buffer_len[100];
-	sprintf(str_buffer_addr, "%" PRIu64, (uint64_t)buffer_addr);
-	sprintf(str_buffer_len, "%" PRIu64, (uint64_t)buffer_len);
-
-	sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
-	if(sock_fd < 0)
-        {
-                DOCA_LOG_ERR("Unable to creat the socket");
-                return DOCA_ERROR_IO_FAILED;
-        }
-
-	addr.sin_addr.s_addr = inet_addr(IP);
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(PORT);
-
-	/* Send the descriptor to the DPU */
-	int bytes_sent = sendto(sock_fd, export_desc, export_desc_len, 0, (struct sockaddr *) &addr, sizeof(addr));
-	if (bytes_sent < 0) {
-		close(sock_fd);
-                return DOCA_ERROR_IO_FAILED;
-    	}
-
-	/* Send the buffer data to the DPU */
-        bytes_sent = sendto(sock_fd, str_buffer_addr, 100 , 0, (struct sockaddr *) &addr, sizeof(addr));
-        if (bytes_sent < 0) {
-                DOCA_LOG_ERR("Couldn't receive data from host");
-                close(sock_fd);
-		return DOCA_ERROR_IO_FAILED;
-        }
-
-	/* Send the buffer length to the DPU */
-        bytes_sent = sendto(sock_fd, str_buffer_len, 100, 0, (struct sockaddr *) &addr, sizeof(addr));
-        if (bytes_sent < 0) {
-		DOCA_LOG_ERR("Couldn't receive data from host");
-                close(sock_fd);
-		return DOCA_ERROR_IO_FAILED;
-        }
-
-	DOCA_LOG_INFO("str_buffer_addr : %s", str_buffer_addr);
-        DOCA_LOG_INFO("str_buffer_len : %s", str_buffer_len);
-//	write(1, export_desc, export_desc_len);
-	DOCA_LOG_INFO("buffer_addr : %ld", buffer_addr);
-        DOCA_LOG_INFO("buffer_len : %ld", buffer_len);
-        DOCA_LOG_INFO("export_desc : %s", export_desc);
-	DOCA_LOG_INFO("export_desc_len : %ld", export_desc_len);
-
-	close(sock_fd);
-	return DOCA_SUCCESS;
-}
 
 doca_error_t
 dma_read(struct doca_pci_bdf *pcie_addr, char *src_buffer, size_t src_buffer_size)
@@ -129,7 +72,7 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *src_buffer, size_t src_buffer_siz
         }
 
 	/* Send exported string and wait for ack that DMA was done on receiver node */
-	result = send_data_to_dpu(export_desc, export_desc_len, src_buffer, src_buffer_size);
+	result = send_dma_data(export_desc, export_desc_len, src_buffer, src_buffer_size, IP, PORT);
 	if (result != DOCA_SUCCESS) {
 		host_destroy_core_objects(&state);
 		free(export_desc);
@@ -154,7 +97,7 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *src_buffer, size_t src_buffer_siz
 
 /*
  * Sample main function
-10 *
+ *
  * @argc [in]: command line arguments size
  * @argv [in]: array of command line arguments
  * @return: EXIT_SUCCESS on success and EXIT_FAILURE otherwise

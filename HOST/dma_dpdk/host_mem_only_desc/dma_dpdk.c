@@ -54,7 +54,7 @@ DOCA_LOG_REGISTER(DMA_READ_HOST);
 struct descriptor
 {
         void*                   buf_addr;
-        uint32_t                pkt_len;
+        int	                pkt_len;
         uint16_t                data_len;
 };
 
@@ -104,9 +104,6 @@ send_data_to_dpu(char *export_desc, size_t export_desc_len, char *src_buffer, si
 		return DOCA_ERROR_IO_FAILED;
         }
 
-	DOCA_LOG_INFO("str_buffer_addr : %s", str_buffer_addr);
-        DOCA_LOG_INFO("str_buffer_len : %s", str_buffer_len);
-//	write(1, export_desc, export_desc_len);
 	DOCA_LOG_INFO("buffer_addr : %ld", buffer_addr);
         DOCA_LOG_INFO("buffer_len : %ld", buffer_len);
         DOCA_LOG_INFO("export_desc : %s", export_desc);
@@ -167,17 +164,22 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *ring, size_t ring_size)
 		return DOCA_ERROR_NOT_CONNECTED;
 	}
 
+	int counter = 0;
+	struct descriptor *desc = {0};
 	/* Read the buffer */
 	for(;;){
-		DOCA_LOG_ERR("head : %" PRIu8 "tail : %" PRIu8, head, tail);
+//		DOCA_LOG_ERR("head : %" PRIu8 "tail : %" PRIu8, head, tail);
 		head = (uint16_t) ring[head_pos];
 		if(tail != head){
+			desc = (struct descriptor*) &ring[tail*sizeof(struct descriptor)];
+			if (desc->pkt_len != counter)
+				DOCA_LOG_ERR("ERROR CA A OVERWRITE : %d - %d", counter, desc->pkt_len);
 			nb_pakt++;
+			counter++;
 			tail++;
 			ring[tail_pos] = (char) tail;
 			printf("Nombre de packet reçu : %ld\n", nb_pakt);
 		}
-		sleep(1);
 	}
 
 	/* DOCA : Destroy all relevant DOCA core objects */

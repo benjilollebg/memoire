@@ -82,8 +82,7 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *src_buffer, size_t src_buffer_siz
 	/* Read the buffer */
 	while(1){
 		printf("%s\n",src_buffer);
-		sleep(3);
-		src_buffer[1] = 'h';
+		sleep(1);
 	}
 
 	/* Destroy all relevant DOCA core objects */
@@ -97,7 +96,7 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *src_buffer, size_t src_buffer_siz
 
 /*
  * Sample main function
-10 *
+ *
  * @argc [in]: command line arguments size
  * @argv [in]: array of command line arguments
  * @return: EXIT_SUCCESS on success and EXIT_FAILURE otherwise
@@ -106,7 +105,7 @@ int
 main(int argc, char **argv)
 {
         struct doca_pci_bdf pcie_dev;
-	size_t src_buffer_size = 3;
+	size_t src_buffer_size = 11;
         char *src_buffer;
         doca_error_t result;
 
@@ -116,7 +115,7 @@ main(int argc, char **argv)
                 DOCA_LOG_ERR("Source buffer allocation failed");
                 return EXIT_FAILURE;
         }
-	memcpy(src_buffer, "00", 3);
+	memcpy(src_buffer, "0123456789", 11);
 
         result = parse_pci_addr("01:00.0", &pcie_dev);
         if (result != DOCA_SUCCESS) {

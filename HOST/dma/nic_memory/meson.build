@@ -10,7 +10,7 @@
 # provided with the software product.
 #
 
-project('DOCA_SAMPLE', 'C', 'CPP',
+project('DMA_HOST_MEMORY', 'C', 'CPP',
         # Get version number from file.
         version: run_command(find_program('cat'),
                 files('/opt/mellanox/doca/applications/VERSION'), check: true).stdout().strip(),
@@ -22,17 +22,17 @@ project('DOCA_SAMPLE', 'C', 'CPP',
 # Comment this line to restore warnings of experimental DOCA features
 add_project_arguments('-D DOCA_ALLOW_EXPERIMENTAL_API', language: ['c', 'cpp'])
 
-sample_dependencies = []
+dependencies = []
 # Required for all DOCA programs
-sample_dependencies += dependency('doca-common')
+dependencies += dependency('doca-common')
 # Library needed for this sample
-sample_dependencies += dependency('doca-dma')
+dependencies += dependency('doca-dma')
 # Library used by the main() function
-sample_dependencies += dependency('doca-argp')
+dependencies += dependency('doca-argp')
 # Library used by the main() function
-sample_dependencies += dependency('libbsd')
+dependencies += dependency('libbsd')
 
-sample_srcs = [
+srcs = [
         # The sample itself
         'dma.c',
         # Common code for the DOCA library samples
@@ -41,19 +41,21 @@ sample_srcs = [
         '/opt/mellanox/doca/samples/common.c',
         # Common code for all DOCA applications
         '/opt/mellanox/doca/applications/common/src/utils.c',
+        # Common code for all DOCA applications
+        '../../../utils/dma_exchange.c',
 ]
 
-sample_inc_dirs  = []
+inc_dirs  = []
 # Common DOCA library logic
-sample_inc_dirs += include_directories('/opt/mellanox/doca/samples/doca_dma')
+inc_dirs += include_directories('/opt/mellanox/doca/samples/doca_dma')
 # Common DOCA logic (samples)
-sample_inc_dirs += include_directories('/opt/mellanox/doca/samples')
+inc_dirs += include_directories('/opt/mellanox/doca/samples')
 # Common DOCA logic
-sample_inc_dirs += include_directories('/opt/mellanox/doca')
+inc_dirs += include_directories('/opt/mellanox/doca')
 # Common DOCA logic (applications)
-sample_inc_dirs += include_directories('/opt/mellanox/doca/applications/common/src')
+inc_dirs += include_directories('/opt/mellanox/doca/applications/common/src')
 
-executable('dma', sample_srcs,
-        dependencies : sample_dependencies,
-        include_directories: sample_inc_dirs,
+executable('dma', srcs,
+        dependencies : dependencies,
+        include_directories: inc_dirs,
         install: false)
