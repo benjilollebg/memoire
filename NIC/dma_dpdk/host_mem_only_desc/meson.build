@@ -43,6 +43,8 @@ srcs = [
         '/opt/mellanox/doca/samples/common.c',
         # Common code for all DOCA applications
         '/opt/mellanox/doca/applications/common/src/utils.c',
+	#
+	'../../../utils/set_dma_buffer.c',
 ]
 
 inc_dirs  = []
@@ -54,6 +56,8 @@ inc_dirs += include_directories('/opt/mellanox/doca/samples')
 inc_dirs += include_directories('/opt/mellanox/doca')
 # Common DOCA logic (applications)
 inc_dirs += include_directories('/opt/mellanox/doca/applications/common/src')
+# 
+inc_dirs += include_directories('../../../utils')
 
 executable('dma-dpdk', srcs,
         dependencies : dependencies,
