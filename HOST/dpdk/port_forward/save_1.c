@@ -12,6 +12,8 @@
 #include <rte_mbuf.h>
 #include <rte_byteorder.h>
 
+#include <../../../utils/port_init.h>
+
 #define RX_RING_SIZE 1024
 
 #define NUM_MBUFS 8191
@@ -20,78 +22,6 @@
 #define NUM_PORTS 2
 
 /* basicfwd.c: Basic DPDK skeleton forwarding example. */
-
-/*
- * Initializes a given port using global settings and with the RX buffers
- * coming from the mbuf_pool passed as a parameter.
- */
-
-/* Main functional part of port initialization. 8< */
-static inline int
-port_init(uint16_t port, struct rte_mempool *mbuf_pool)
-{
-        struct rte_eth_conf port_conf;
-        const uint16_t rx_rings = 1;
-        uint16_t nb_rxd = RX_RING_SIZE;
-        int retval;
-        uint16_t q;
-        struct rte_eth_dev_info dev_info;
-
-        if (!rte_eth_dev_is_valid_port(port))
-                return -1;
-
-        memset(&port_conf, 0, sizeof(struct rte_eth_conf));
-
-        retval = rte_eth_dev_info_get(port, &dev_info);
-        if (retval != 0) {
-                printf("Error during getting device (port %u) info: %s\n",
-                                port, strerror(-retval));
-                return retval;
-        }
-
-
-        /* Configure the Ethernet device. */
-        retval = rte_eth_dev_configure(port, rx_rings, 0, &port_conf);
-        if (retval != 0)
-                return retval;
-
-        retval = rte_eth_dev_adjust_nb_rx_tx_desc(port, &nb_rxd, NULL);
-        if (retval != 0)
-                return retval;
-
-        /* Allocate and set up 1 RX queue per Ethernet port. */
-        for (q = 0; q < rx_rings; q++) {
-                retval = rte_eth_rx_queue_setup(port, q, nb_rxd,
-                                rte_eth_dev_socket_id(port), NULL, mbuf_pool);
-                if (retval < 0)
-                        return retval;
-        }
-
-        /* Starting Ethernet port. 8< */
-        retval = rte_eth_dev_start(port);
-        /* >8 End of starting of ethernet port. */
-        if (retval < 0)
-                return retval;
-
-        /* Display the port MAC address. */
-        struct rte_ether_addr addr;
-        retval = rte_eth_macaddr_get(port, &addr);
-        if (retval != 0)
-                return retval;
-/*
-        printf("Port %u MAC: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
-                           " %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
-                        port, RTE_ETHER_ADDR_BYTES(&addr));
-*/
-        /* Enable RX in promiscuous mode for the Ethernet device. */
-        retval = rte_eth_promiscuous_enable(port);
-        /* End of setting RX port in promiscuous mode. */
-        if (retval != 0)
-                return retval;
-
-        return 0;
-}
-/* >8 End of main functional part of port initialization. */
 
 /*
  * The lcore main. This is the main thread that does the work, reading from
@@ -118,7 +48,7 @@ lcore_main(uint16_t port)
         printf("\nCore %u counting incoming packets. [Ctrl+C to quit]\n",
                         rte_lcore_id());
 
-        /* Main work of application loop. 8< */
+        /* Main work of application loop */
         for (;;) {
                 /*
                  * Receive packets on a port and forward them on the paired
@@ -143,9 +73,7 @@ lcore_main(uint16_t port)
                 for (buf = 0; buf < nb_rx; buf++)
                         rte_pktmbuf_free(bufs[buf]);
         }
-        /* >8 End of loop. */
 }
-/* >8 End Basic forwarding application lcore. */
 
 /*
  * The main function, which does initialization and calls the per-lcore
@@ -168,13 +96,6 @@ main(int argc, char *argv[])
         argc -= ret;
         argv += ret;
 
-        /* Check that there is an even number of ports to send/receive on. */
-        //nb_ports = rte_eth_dev_count_avail();
-/*
-        if (nb_ports < 2 || (nb_ports & 1))
-                rte_exit(EXIT_FAILURE, "Error: number of ports must be even\n");
-*/
-
         /* Initialize the MAC addresses to count the incoming number of packets */
         struct rte_ether_addr macAddr1;
 
@@ -184,8 +105,6 @@ main(int argc, char *argv[])
         macAddr1.addr_bytes[3]=0xD1;
         macAddr1.addr_bytes[4]=0xFB;
         macAddr1.addr_bytes[5]=0x26;
-
-        /* Creates a new mempool in memory to hold the mbufs. */
 
         /* Allocates mempool to hold the mbufs. 8< */
         mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
@@ -206,12 +125,12 @@ main(int argc, char *argv[])
 
                 /* Only init the two desired port (depending on the specified MAC address) */
                 if(memcmp(&addr, &macAddr1, 6) == 0){
-                        if (port_init(portid, mbuf_pool) != 0)
+                        retval = port_init(portid, mbuf_pool);
+			if (retval != 0)
                                 rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n",portid);
                         port = portid;
                 }
         }
-        /* >8 End of initializing all ports. */
 
         if (rte_lcore_count() > 1)
                 printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
