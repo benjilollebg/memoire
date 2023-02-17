@@ -10,13 +10,13 @@
 # provided with the software product.
 #
 
-project('DMA_DPDK_HOST', 'C', 'CPP',
-        # Get version number from file.
-        version: run_command(find_program('cat'),
-                files('/opt/mellanox/doca/applications/VERSION'), check: true).stdout().strip(),
-        license: 'Proprietary',
-        default_options: ['buildtype=debug'],
-        meson_version: '>= 0.61.2'
+project('DMA', 'C', 'CPP',
+	# Get version number from file.
+	version: run_command(find_program('cat'),
+		files('/opt/mellanox/doca/applications/VERSION'), check: true).stdout().strip(),
+	license: 'Proprietary',
+	default_options: ['buildtype=debug'],
+	meson_version: '>= 0.61.2'
 )
 
 # Comment this line to restore warnings of experimental DOCA features
@@ -31,20 +31,18 @@ dependencies += dependency('doca-dma')
 dependencies += dependency('doca-argp')
 # Library used by the main() function
 dependencies += dependency('libbsd')
-# 
-dependencies += dependency('libdpdk')
 
 srcs = [
-        # The sample itself
-        'dma_dpdk.c',
-        # Common code for the DOCA library samples
-        '/opt/mellanox/doca/samples/doca_dma/dma_common.c',
-        # Common code for all DOCA samples
-        '/opt/mellanox/doca/samples/common.c',
-        # Common code for all DOCA applications
-        '/opt/mellanox/doca/applications/common/src/utils.c',
-	#
-	'../../../utils/set_dma_buffer.c',
+	# The sample itself
+	'dma.c',
+	# Common code for the DOCA library samples
+	'/opt/mellanox/doca/samples/doca_dma/dma_common.c',
+	# Common code for all DOCA samples
+	'/opt/mellanox/doca/samples/common.c',
+	# Common code for all DOCA applications
+	'/opt/mellanox/doca/applications/common/src/utils.c',
+	# Common code for DMA data exchange
+        '../../../utils/dma_exchange.c',
 ]
 
 inc_dirs  = []
@@ -56,10 +54,8 @@ inc_dirs += include_directories('/opt/mellanox/doca/samples')
 inc_dirs += include_directories('/opt/mellanox/doca')
 # Common DOCA logic (applications)
 inc_dirs += include_directories('/opt/mellanox/doca/applications/common/src')
-# 
-inc_dirs += include_directories('../../../utils')
 
-executable('dma-dpdk', srcs,
-        dependencies : dependencies,
-        include_directories: inc_dirs,
+executable('dma', srcs,
+	dependencies : dependencies,
+	include_directories: inc_dirs,
 	install: false)

@@ -38,8 +38,7 @@
 
 DOCA_LOG_REGISTER(DMA_WRITE_DPU);
 
-//#define SLEEP_IN_NANOS (10 * 1000)	/* Sample the job every 10 microseconds  */
-#define SLEEP_IN_NANOS (10)      /* Sample the job every 10 nanocroseconds  */
+#define SLEEP_IN_NANOS (10 * 1000)	/* Sample the job every 10 microseconds  */
 #define MAX_DMA_BUF_SIZE (1024 * 1024)	/* DMA buffer maximum size */
 #define RECV_BUF_SIZE 256		/* Buffer which contains config information */
 
@@ -59,7 +58,7 @@ DOCA_LOG_REGISTER(DMA_WRITE_DPU);
 
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 64
+#define BURST_SIZE 32
 #define DESCRIPTOR_NB 256	 	/* The number of descriptor in the ring (MAX 256 or change head-tail to uint16_t) */
 #define NUM_PORTS 1
 
