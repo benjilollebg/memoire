@@ -20,8 +20,6 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <inttypes.h>
-#include <getopt.h>
-#include <stdarg.h>
 
 #include "utils.h"
 #include <../../../utils/set_dma_buffer.h>
@@ -38,22 +36,15 @@
 
 #include "dma_common.h"
 
-DOCA_LOG_REGISTER(MAIN);
+DOCA_LOG_REGISTER(DMA_WRITE_DPU);
 
 //#define SLEEP_IN_NANOS (10 * 1000)	/* Sample the job every 10 microseconds  */
 #define SLEEP_IN_NANOS (10)  		/* Sample the job every 10 nanocroseconds  */
 #define MAX_DMA_BUF_SIZE (1024 * 1024)	/* DMA buffer maximum size */
 #define RECV_BUF_SIZE 256		/* Buffer which contains config information */
 
-
-#define WORKQ_DEPTH 128			/* Work queue depth : MAY CAUSE CRASH IF TOO LOW (be cause we don't wait for termination)
-					 * if WORKQ_DEPTH < DESCRIPTOR_NB, too many dma jobs may saturate the queue
-					 * /!\ REDEFINITION of value defined in dma_common.h /!\
-					 */
-
-
 #define IP "192.168.100.1"
-#define PORT 6660
+#define PORT 6666
 #define PCIE_ADDR "03:00.0"
 
 // DPDK
@@ -65,26 +56,19 @@ DOCA_LOG_REGISTER(MAIN);
 #include <rte_mbuf.h>
 
 #define RX_RING_SIZE 1024		/* The size of each RX queue */
+#define NB_RX 1				/* The number of RX queue per port */
 
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 256
 #define DESCRIPTOR_NB 2048	 	/* The number of descriptor in the ring (MAX uint16_t max val or change head-tail type) */
-#define NB_PORTS 1
-
-static uint32_t nb_core = 1;		/* The number of Core working (max 7) */
+#define NUM_PORTS 1
 
 struct descriptor
 {
         void*                   buf_addr;
         int	                pkt_len;
         uint16_t                data_len;
-};
-
-struct arguments
-{
-	struct doca_pci_bdf*	pcie_addr;
-	uint16_t 		port;
 };
 
 /*
@@ -120,7 +104,7 @@ receive_data_from_host(char *export_desc, size_t *export_desc_len, char **remote
 
         servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
         servaddr.sin_family = AF_INET;
-        servaddr.sin_port = htons(PORT + rte_lcore_id());
+        servaddr.sin_port = htons(PORT);
 
 	result = bind(sock_fd, (struct sockaddr *) &servaddr, sizeof(servaddr));
 	if (result != 0){
@@ -128,7 +112,7 @@ receive_data_from_host(char *export_desc, size_t *export_desc_len, char **remote
         	return DOCA_ERROR_IO_FAILED;
     	}
 
-	printf("Core %d, receiving data\n", rte_lcore_id());
+	DOCA_LOG_ERR("Receiving data");
 
 	/* Receive the descriptor on the socket */
 	socklen_t client_len = sizeof(client);
@@ -138,6 +122,8 @@ receive_data_from_host(char *export_desc, size_t *export_desc_len, char **remote
 		close(sock_fd);
                 return DOCA_ERROR_IO_FAILED;
     	}
+	DOCA_LOG_INFO("export_desc : %s", export_desc);
+        DOCA_LOG_INFO("export_desc_len : %ld", *export_desc_len);
 
 	/* Receive the buffer address on the socket */
 	int bytes_received = recvfrom(sock_fd, buffer, RECV_BUF_SIZE, 0, (struct sockaddr *) &client, &client_len);
@@ -147,6 +133,7 @@ receive_data_from_host(char *export_desc, size_t *export_desc_len, char **remote
                 return DOCA_ERROR_IO_FAILED;
         }
 	*remote_addr = (char*) strtoull(buffer, NULL, 0);
+	DOCA_LOG_INFO("remote_addr : %lld", strtoull(buffer, NULL, 0));
 
         memset(buffer, 0, RECV_BUF_SIZE);
 
@@ -158,13 +145,9 @@ receive_data_from_host(char *export_desc, size_t *export_desc_len, char **remote
                 return DOCA_ERROR_IO_FAILED;
         }
 	*remote_addr_len = strtoull(buffer, NULL, 0);
+	DOCA_LOG_INFO("remote_addr_len : %ld", *remote_addr_len);
 
-	printf("Core %d, remote_addr : %lld", rte_lcore_id(), strtoull(buffer, NULL, 0));
-	printf("Core %d, export_desc : %s\n", rte_lcore_id(), export_desc);
-        printf("Core %d, export_desc_len : %ld\n", rte_lcore_id(), *export_desc_len);
-	printf("Core %d, remote_addr_len : %ld\n", rte_lcore_id(), *remote_addr_len);
-	printf("Core %d, exported data was received\n", rte_lcore_id());
-	fflush(stdout);
+	DOCA_LOG_INFO("Exported data was received");
 
 	return DOCA_SUCCESS;
 }
@@ -181,8 +164,8 @@ receive_data_from_host(char *export_desc, size_t *export_desc_len, char **remote
 static int
 port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 {
-//        struct rte_eth_conf port_conf;
-        const uint16_t rx_rings = nb_core;
+        //struct rte_eth_conf port_conf;
+        const uint16_t rx_rings = NB_RX;
         uint16_t nb_rxd = RX_RING_SIZE;
         int retval;
         uint16_t q;
@@ -206,7 +189,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
         if (!rte_eth_dev_is_valid_port(port))
                 return -1;
 
-//        memset(&port_conf, 0, sizeof(struct rte_eth_conf));
+        //memset(&port_conf, 0, sizeof(struct rte_eth_conf));
 
         retval = rte_eth_dev_info_get(port, &dev_info);
         if (retval != 0) {
@@ -242,7 +225,11 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
         retval = rte_eth_macaddr_get(port, &addr);
         if (retval != 0)
                 return retval;
-
+/*
+        printf("Port %u MAC: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+                           " %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+                        port, RTE_ETHER_ADDR_BYTES(&addr));
+*/
         /* Enable RX in promiscuous mode for the Ethernet device. */
         retval = rte_eth_promiscuous_enable(port);
 
@@ -266,7 +253,6 @@ read_write(struct doca_dma_job_memcpy dma_job, struct program_core_objects state
         }
 
         /* DOCA : Wait for job completion */
-
         while ((result = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
                 DOCA_ERROR_AGAIN) {
                 nanosleep(&ts, &ts);
@@ -277,13 +263,11 @@ read_write(struct doca_dma_job_memcpy dma_job, struct program_core_objects state
         }
 
         /* DOCA : event result is valid */
-
         result = (doca_error_t)event.result.u64;
         if (result != DOCA_SUCCESS) {
                 DOCA_LOG_ERR("DMA job event returned unsuccessfully: %s", doca_get_error_string(result));
                 return result;
         }
-
 	return DOCA_SUCCESS;
 }
 
@@ -295,15 +279,9 @@ read_write(struct doca_dma_job_memcpy dma_job, struct program_core_objects state
  * @pcie_addr [in]: Device PCI address
  * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
  */
-static int
-job(void* arg)
-//struct doca_pci_bdf *pcie_addr, uint16_t port)
+doca_error_t
+dma_write(struct doca_pci_bdf *pcie_addr, uint16_t port)
 {
-	// args
-	struct arguments* args = (struct arguments*) arg;
-	struct doca_pci_bdf *pcie_addr = args->pcie_addr;
-	uint16_t port = args->port;
-
 	// DOCA
         struct program_core_objects state = {0};
         struct doca_event event = {0};
@@ -436,10 +414,9 @@ job(void* arg)
         struct descriptor descriptors[BURST_SIZE];
 //	struct descriptor* descriptors = (struct descriptor*) ring;
 
-	int threshold = 0;
+	int threshold = 100;
 	int counter = 0;
 	int old_head = head;
-
         /* Main work of application loop */
         for (;;)
 	{
@@ -448,19 +425,29 @@ job(void* arg)
 		old_head = head;
 
 		/* DPDK : Get burst of RX packets from the port */
-                const uint16_t nb_rx = rte_eth_rx_burst(port, rte_lcore_id() - 1, bufs, BURST_SIZE);
+                const uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
 
 		nb_pakt += nb_rx;
-
+		//DOCA_LOG_ERR("Packet received : %u", nb_pakt);
                 if (unlikely(nb_rx == 0))
                         continue;
-
 		// read tail
+		set_buf_read(src_doca_buf, dst_doca_buf, &remote_addr[tail_pos], &ring[tail_pos], sizeof(tail));
+
+                result = read_write(dma_job_read, state, ts, event);
+                if (result != DOCA_SUCCESS){
+                        doca_buf_refcount_rm(dst_doca_buf, NULL);
+                        doca_buf_refcount_rm(src_doca_buf, NULL);
+                        doca_mmap_destroy(remote_mmap);
+                        free(ring);
+                	dma_cleanup(&state, dma_ctx);
+                }
+                tail = *((uint16_t*) &ring[tail_pos]);
+
 		/* Wait for the tail to not overwrite */
 		if (head + nb_rx > DESCRIPTOR_NB){
-			set_buf_read(src_doca_buf, dst_doca_buf, &remote_addr[tail_pos], &ring[tail_pos], sizeof(tail));
 			while(tail > head || tail <= (head + nb_rx) % DESCRIPTOR_NB){
-				printf("Core : %d, RING IS FULL\n", rte_lcore_id());
+				printf("RING IS FULL");
 				// read tail
                                 result = read_write(dma_job_read, state, ts, event);
 				if (result != DOCA_SUCCESS){
@@ -474,9 +461,8 @@ job(void* arg)
 			}
 		}
 		else {
-			set_buf_read(src_doca_buf, dst_doca_buf, &remote_addr[tail_pos], &ring[tail_pos], sizeof(tail));
 			while(tail > head && tail <= head + nb_rx){
-				 printf("Core : %d, RING IS FULL\n", rte_lcore_id());
+				printf("RING IS FULL");
 				// read tail
 				result = read_write(dma_job_read, state, ts, event);
                                 if (result != DOCA_SUCCESS){
@@ -489,6 +475,7 @@ job(void* arg)
 				tail = *((uint16_t*) &ring[tail_pos]);
 			}
 		}
+printf("tail : %u head : %u\n",tail,head);
 
                 /* Modify the descriptor */
                 for (int i = 0; i < nb_rx; i++) {
@@ -509,6 +496,9 @@ job(void* arg)
 			if (head == DESCRIPTOR_NB)
                                 head = 0;
                 }
+
+		/* Set the new head value */
+		memcpy(&ring[head_pos], &head, sizeof(head));
 
 		/* Write the new descriptors in the dma buffer */
 		if (old_head + nb_rx <= DESCRIPTOR_NB){
@@ -548,10 +538,6 @@ job(void* arg)
                                 dma_cleanup(&state, dma_ctx);
 		        }
 		}
-
-		/* Set the new head value */
-                memcpy(&ring[head_pos], &head, sizeof(head));
-
 		/* Write the head in the dma buffer */
 		set_buf_write(src_doca_buf, dst_doca_buf, &remote_addr[head_pos], &ring[head_pos], sizeof(head));
 
@@ -564,10 +550,10 @@ job(void* arg)
                         dma_cleanup(&state, dma_ctx);
                 }
 
-		if (nb_pakt > threshold){
-			printf("\nCore %u forwarded %u packets via DMA for a total of %lu packets\n",
-                        	        rte_lcore_id(), nb_rx, nb_pakt);
-	      		threshold = threshold +1;
+		if (nb_pakt >threshold){
+			printf("\nPort %u forwarded %u packets via DMA for a total of %lu packets\n",
+                        	        port, nb_rx, nb_pakt);
+	      		threshold = threshold +100;
 		}
 	}
 
@@ -593,41 +579,9 @@ job(void* arg)
         return result;
 }
 
-/* display usage */
-static void
-usage()
-{
-        printf(" [EAL options] -- -p PORTMASK [-P] [-q NQ]\n"
-	       "  -c NUMBER : Number of core to use, default : 1 (MAX : number of core of hardware - 1)"
-               "  -p PORTMASK : hexadecimal bitmask of ports to configure\n"
-               "  -P : Enable promiscuous mode\n"
-               "  -q NQ : number of queue (=ports) per lcore (default is 1)\n"
-               "  -T PERIOD : statistics will be refreshed each PERIOD seconds (0 to disable, 10 default, 86400 maximum)\n"
-               "  --no-mac-updating : Disable MAC addresses updating (enabled by default)\n"
-               "      When enabled :\n"
-               "       - The source MAC address is replaced by the TX port MAC address\n"
-               "       - The destination MAC address is replaced by 02:00:00:00:00:TX_PORT_ID\n"
-               "  --portmap : Configure forwarding port pair mapping\n"
-               "              Default: alternate port pairs\n\n");
-}
-
-void
-parse(int argc, char **argv)
-{
-	while ((opt = getopt(argc, argv, "c:hEnsTv")) != -1)
-	{
-    		switch (opt)
-		{
-    			case 'c':
-      				printf("Put line numbers next to non-blank lines");
-      				break;
-			case 'h':
-				usage();
-				break;
-    			default:
-      				usage();
-    		}
-  	}
+void test(int id){
+	sleep(id);
+	printf("core : %d",id);
 }
 
 /*
@@ -640,28 +594,25 @@ parse(int argc, char **argv)
 int
 main(int argc, char **argv)
 {
-	// args
-	struct arguments args;
-
 	// DOCA
         struct doca_pci_bdf pcie_dev;
         int result;
 
 	// DPDK
 	struct rte_mempool *mbuf_pool;
+        unsigned nb_ports = 1;
 	uint16_t lcore_id;
         uint16_t portid;
 	uint16_t port;
+	int ret;
 
 	/* DPDK : Initializion the Environment Abstraction Layer (EAL) */
-        result = rte_eal_init(argc, argv);
-        if (result < 0)
+        ret = rte_eal_init(argc, argv);
+        if (ret < 0)
                 rte_exit(EXIT_FAILURE, "Error with EAL initialization\n");
 
-        argc -= result;
-        argv += result;
-
-	printf("Number of core enabled : %d\n", nb_core);
+        argc -= ret;
+        argv += ret;
 
         /* DPDK : Initialize the MAC address to read the data (p0) */
         struct rte_ether_addr macAddr1;
@@ -674,7 +625,7 @@ main(int argc, char **argv)
         macAddr1.addr_bytes[5]=0x2A;
 
         /* DPDK : Creates a new mempool in memory to hold the mbufs. */
-        mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS,
+        mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
                 MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
         if (mbuf_pool == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
@@ -693,9 +644,11 @@ main(int argc, char **argv)
                         if (port_init(portid, mbuf_pool) != 0)
                                 rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n",portid);
 			port = portid;
-			printf("Port receiving data : %d\n",port);
                 }
         }
+
+        if (rte_lcore_count() > 1)
+                printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
 
 	/* DOCA : */
         result = parse_pci_addr(PCIE_ADDR, &pcie_dev);
@@ -704,17 +657,19 @@ main(int argc, char **argv)
                 return EXIT_FAILURE;
         }
 
-	args.pcie_addr = &pcie_dev;
-	args.port = port;
+	RTE_LCORE_FOREACH_WORKER(lcore_id)
+	{
+		DOCA_LOG_ERR("Core id : %d", lcore_id);
+		printf("%d",lcore_id);
+		test(lcore_id);
+	}
 
-	/* MAIN : polling each queue on a lcore */
-        RTE_LCORE_FOREACH_WORKER(lcore_id)
-        {
-		if(lcore_id <= nb_core)
-			rte_eal_remote_launch(job, &args, lcore_id);
+	/* MAIN : */
+	result = dma_write(&pcie_dev, port);
+        if (result != DOCA_SUCCESS) {
+                DOCA_LOG_ERR("DMA on DPU function has failed: %s", doca_get_error_string(result));
+                return EXIT_FAILURE;
         }
-
-	rte_eal_mp_wait_lcore();
 
 	/* DPDK : clean up the EAL */
         rte_eal_cleanup();
