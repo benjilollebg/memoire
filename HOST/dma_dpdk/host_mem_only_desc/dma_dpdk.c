@@ -40,6 +40,7 @@
 #define IP "192.168.100.2"
 #define PORT 6666
 #define BUFF_SIZE 1024*1024
+#define PCIE_ADDR "01:00.0"
 
 DOCA_LOG_REGISTER(DMA_READ_HOST);
 
@@ -126,7 +127,7 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *ring, size_t ring_size)
         uint8_t head = 0;
         uint8_t tail = 0;
         uint16_t head_pos = descriptor_size * DESCRIPTOR_NB;
-        uint16_t tail_pos = descriptor_size * DESCRIPTOR_NB + 1;
+        uint16_t tail_pos = descriptor_size * DESCRIPTOR_NB + sizeof(head);
 
 	uint64_t nb_pakt = 0;
 
@@ -164,18 +165,19 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *ring, size_t ring_size)
 		return DOCA_ERROR_NOT_CONNECTED;
 	}
 
-	int counter = 0;
 	struct descriptor *desc = {0};
+	int counter = 0;
 	/* Read the buffer */
 	for(;;){
 //		DOCA_LOG_ERR("head : %" PRIu8 "tail : %" PRIu8, head, tail);
 		head = (uint16_t) ring[head_pos];
+//		printf("tail : %d head : %d\n", tail, head);
 		if(tail != head){
 			desc = (struct descriptor*) &ring[tail*sizeof(struct descriptor)];
-			if (desc->pkt_len != counter)
-				DOCA_LOG_ERR("ERROR CA A OVERWRITE : %d - %d", counter, desc->pkt_len);
-			nb_pakt++;
+			if(counter != desc->pkt_len)
+				return DOCA_ERROR_NOT_CONNECTED;
 			counter++;
+			nb_pakt++;
 			tail++;
 			ring[tail_pos] = (char) tail;
 			printf("Nombre de packet reçu : %ld\n", nb_pakt);
@@ -193,7 +195,7 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *ring, size_t ring_size)
 
 /*
  * Sample main function
-10 *
+ *
  * @argc [in]: command line arguments size
  * @argv [in]: array of command line arguments
  * @return: EXIT_SUCCESS on success and EXIT_FAILURE otherwise
@@ -216,7 +218,7 @@ main(int argc, char **argv)
                 return EXIT_FAILURE;
         }
 
-        result = parse_pci_addr("01:00.0", &pcie_dev);
+        result = parse_pci_addr(PCIE_ADDR, &pcie_dev);
         if (result != DOCA_SUCCESS) {
                 DOCA_LOG_ERR("Failed to parse pci address: %s", doca_get_error_string(result));
                 return EXIT_FAILURE;

@@ -32,6 +32,11 @@ srcs = [
 	'../../../utils/port_init.c',
 ]
 
+inc_dirs  = []
+#
+inc_dirs += include_directories('../../../utils')
+
 executable('counter', srcs,
         dependencies : dependencies,
+	include_directories: inc_dirs,
         install: false)
