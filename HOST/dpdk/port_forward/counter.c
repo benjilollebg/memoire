@@ -12,11 +12,13 @@
 #include <rte_mbuf.h>
 #include <rte_byteorder.h>
 
+#include <../../../utils/port_init.h>
+
 #define RX_RING_SIZE 1024
 
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 32
+#define BURST_SIZE 256
 #define NUM_PORTS 2
 
 /* basicfwd.c: Basic DPDK skeleton forwarding example. */
