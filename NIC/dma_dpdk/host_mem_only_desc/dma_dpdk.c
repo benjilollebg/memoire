@@ -75,13 +75,14 @@ DOCA_LOG_REGISTER(MAIN);
 
 struct rte_eth_stats eth_stats;
 static volatile bool force_quit = false;
-static uint32_t nb_core = 1;		/* The number of Core working (max 7) */
+static uint32_t nb_core = 2;		/* The number of Core working (max 7) */
 
 struct descriptor
 {
         void*                   buf_addr;
         int	                pkt_len;
         uint16_t                data_len;
+	uint32_t 		ip_src;
 };
 
 struct arguments
@@ -322,7 +323,6 @@ read_dma(struct doca_dma_job_memcpy dma_job, struct program_core_objects state, 
  */
 static int
 job(void* arg)
-//struct doca_pci_bdf *pcie_addr, uint16_t port)
 {
 	// args
 	struct arguments* args = (struct arguments*) arg;
@@ -564,12 +564,37 @@ job(void* arg)
                         descriptors[i].data_len = bufs[i]->data_len;
 			counter++;
 
+			/* if this is an IPv4 packet */
+                        if (RTE_ETH_IS_IPV4_HDR(bufs[i]->packet_type)) {
+                                struct rte_ipv4_hdr *ip_hdr;
+                                uint32_t ip_dst = 0;
+                                uint32_t ip_src = 0;
+
+                                ip_hdr = rte_pktmbuf_mtod(bufs[i], struct rte_ipv4_hdr *);
+                                ip_dst = rte_be_to_cpu_32(ip_hdr->dst_addr);
+                                ip_src = rte_be_to_cpu_32(ip_hdr->src_addr);
+
+				descriptors[i].ip_src = ip_src;
+
+                                printf("\nCore %d, Received an IPv4 packet from %d for a total of %d packets\n", rte_lcore_id(), ip_src, counter);
+                        }
+                        else if (RTE_ETH_IS_IPV6_HDR(bufs[i]->packet_type)) {
+                                struct rte_ipv6_hdr *ip_hdr;
+                                ip_hdr = rte_pktmbuf_mtod(bufs[i], struct rte_ipv6_hdr *);
+
+                                printf("\nCore %d,Received an IPv6 packet from %hhn for a total of %d packets\n", rte_lcore_id(), ip_hdr->src_addr, counter);
+                        }
+                        else{
+                                printf("\nCore %d,IP header doesn't match any type (ipv4 or ipv6)\n", rte_lcore_id());
+                        }
+
                 	/* Free the mbuf */
                         rte_pktmbuf_free(bufs[i]);
 
 			/* Write the descriptors in the ring */
 			memcpy(&ring[head*sizeof(struct descriptor)], (char *) &(descriptors[i]), sizeof(struct descriptor));
 
+			/* Increase the head value */
 			head++;
 			if (head == DESCRIPTOR_NB)
                                 head = 0;
@@ -676,6 +701,36 @@ parse(int argc, char **argv)
   	}
 }
 
+static int
+job_stat(void* arg)
+{
+        // args
+        struct arguments* args = (struct arguments*) arg;
+        uint16_t port = args->port;
+
+	struct rte_eth_stats stats = {0};
+    	while (1){
+		/* Quit the app on Control+C */
+                if (force_quit)
+                {
+                        return 0;
+                }
+
+        	// Get port stats
+        	struct rte_eth_stats new_stats;
+        	rte_eth_stats_get(port, &new_stats);
+        	// Print stats
+        	printf("\nNumber of received packets : %ld"
+		       "\nNumber of missed packets : %ld"
+		       "\nNumber of queued RX packets : %ld"
+		       "\nNumber of dropped queued packet : %ld\n\n"
+			, new_stats.ipackets, new_stats.imissed, new_stats.q_ipackets[0], new_stats.q_errors[0]);
+        	// Sleep for 1 second
+        	sleep(1);
+    	}
+}
+
+
 /*
  * Sample main function
  *
@@ -762,6 +817,8 @@ main(int argc, char **argv)
         {
 		if(lcore_id <= nb_core)
 			rte_eal_remote_launch(job, &args, lcore_id);
+		if(lcore_id == 7)
+			rte_eal_remote_launch(job_stat, &args, lcore_id);
         }
 
 	rte_eal_mp_wait_lcore();

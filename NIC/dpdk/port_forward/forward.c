@@ -2,6 +2,8 @@
  * Copyright(c) 2010-2015 Intel Corporation
  */
 
+#include <unistd.h>
+#include <signal.h>
 #include <stdint.h>
 #include <inttypes.h>
 #include <rte_eal.h>
@@ -18,6 +20,27 @@
 #define BURST_SIZE 32
 #define NUM_PORTS 2
 
+static volatile bool force_quit = false;
+static uint32_t nb_core = 2;            	/* The number of Core working (max 7) */
+
+
+struct arguments
+{
+        uint16_t    	port_src;
+        uint16_t        port_dst;
+};
+
+
+static void
+signal_handler(int signum)
+{
+        if (signum == SIGINT || signum == SIGTERM) {
+                printf("\n\nSignal %d received, preparing to exit\n", signum);
+                force_quit = true;
+        }
+}
+
+
 /* basicfwd.c: Basic DPDK skeleton forwarding example. */
 
 /*
@@ -29,8 +52,7 @@
 static inline int
 port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 {
-        struct rte_eth_conf port_conf;
-        const uint16_t rx_rings = 1, tx_rings = 1;
+        const uint16_t rx_rings = nb_core, tx_rings = nb_core;
         uint16_t nb_rxd = RX_RING_SIZE;
         uint16_t nb_txd = TX_RING_SIZE;
         int retval;
@@ -41,7 +63,20 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
         if (!rte_eth_dev_is_valid_port(port))
                 return -1;
 
-        memset(&port_conf, 0, sizeof(struct rte_eth_conf));
+	static struct rte_eth_conf port_conf = {
+                .rxmode = {
+                        .mq_mode = ETH_MQ_RX_RSS,
+                },
+                .rx_adv_conf = {
+                        .rss_conf = {
+                                .rss_key = NULL,
+                                .rss_hf = ETH_RSS_IP | ETH_RSS_TCP | ETH_RSS_UDP,
+                        },
+                },
+                .txmode = {
+                        .mq_mode = ETH_MQ_TX_NONE,
+                },
+        };
 
         retval = rte_eth_dev_info_get(port, &dev_info);
         if (retval != 0) {
@@ -49,11 +84,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
                                 port, strerror(-retval));
                 return retval;
         }
-/*
-        if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
-                port_conf.txmode.offloads |=
-                        RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
-*/
+
         /* Configure the Ethernet device. */
         retval = rte_eth_dev_configure(port, rx_rings, tx_rings, &port_conf);
         if (retval != 0)
@@ -92,87 +123,116 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
         retval = rte_eth_macaddr_get(port, &addr);
         if (retval != 0)
                 return retval;
-/*
-        printf("Port %u MAC: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
-                           " %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
-                        port, RTE_ETHER_ADDR_BYTES(&addr));
-*/
+
         /* Enable RX in promiscuous mode for the Ethernet device. */
         retval = rte_eth_promiscuous_enable(port);
-        /* End of setting RX port in promiscuous mode. */
+
         if (retval != 0)
                 return retval;
 
         return 0;
 }
-/* >8 End of main functional part of port initialization. */
 
 /*
  * The lcore main. This is the main thread that does the work, reading from
  * an input port and writing to an output port.
  */
-
- /* Basic forwarding application lcore. 8< */
-static __rte_noreturn void
-lcore_main(uint16_t port[])
+static int
+job(void* arg)
 {
-        uint64_t port_stats[NUM_PORTS];
-        for (int i = 0; i < NUM_PORTS; i++) {
-                port_stats[i] = 0;
-        }
+	// args
+        struct arguments* args = (struct arguments*) arg;
+        uint16_t port_src = args->port_src;
+        uint16_t port_dst = args->port_dst;
 
-        /*
-         * Check that the port is on the same NUMA node as the polling thread
-         * for best performance.
-         */
-        for (int i = 0; i < 2; i++)
-                if (rte_eth_dev_socket_id(port[i]) >= 0 &&
-                                rte_eth_dev_socket_id(port[i]) !=
-                                                (int)rte_socket_id())
-                        printf("WARNING, port %u is on remote NUMA node to "
-                                        "polling thread.\n\tPerformance will "
-                                        "not be optimal.\n", port[i]);
+        uint64_t port_stats = 0;
 
+        signal(SIGINT, signal_handler);
+        signal(SIGTERM, signal_handler);
 
-        printf("\nCore %u forwarding packets. [Ctrl+C to quit]\n",
-                        rte_lcore_id());
+        printf("\nCore %u forwarding packets. [Ctrl+C to quit]\n", rte_lcore_id());
 
         /* Main work of application loop. 8< */
         for (;;) {
-                /*
-                 * Receive packets on a port and forward them on the paired
-                 * port. The mapping is 0 -> 1, 1 -> 0, 2 -> 3, 3 -> 2, etc.
-                 */
-                for (int i = 0; i < 2; i++){
 
-                        /* Get burst of RX packets, from first port of pair. */
-                        struct rte_mbuf *bufs[BURST_SIZE];
-                        const uint16_t nb_rx = rte_eth_rx_burst(port[i], 0,
-                                        bufs, BURST_SIZE);
+		/* Quit the app on Control+C */
+                if (force_quit)
+			return 0;
 
-                        if (unlikely(nb_rx == 0))
-                                continue;
+                /* Get burst of RX packets, from first port of pair. */
+                struct rte_mbuf *bufs[BURST_SIZE];
+                const uint16_t nb_rx = rte_eth_rx_burst(port_src, rte_lcore_id() - 1, bufs, BURST_SIZE);
 
-                        /* Send burst of TX packets, to second port of pair. */
-                        const uint16_t nb_tx = rte_eth_tx_burst(port[i] ^ 1, 0,
-                                        bufs, nb_rx);
+                if (unlikely(nb_rx == 0))
+                        continue;
 
-                         port_stats[i] += nb_tx;
+		/* Modify the descriptor */
+                for (int i = 0; i < nb_rx; i++) {
 
-                        printf("\nPort %u forwarded %u packets via Port %u for a total of %lu packets\n",
-                                        port[i], nb_tx, port[i] ^ 1, port_stats[i]);
+                        /* if this is an IPv4 packet */
+                        if (RTE_ETH_IS_IPV4_HDR(bufs[i]->packet_type)) {
+                                struct rte_ipv4_hdr *ip_hdr;
+                                uint32_t ip_dst = 0;
+                                uint32_t ip_src = 0;
 
-                        /* Free any unsent packets. */
-                        if (unlikely(nb_tx < nb_rx)) {
-                                uint16_t buf;
-                                for (buf = nb_tx; buf < nb_rx; buf++)
-                                        rte_pktmbuf_free(bufs[buf]);
+                                ip_hdr = rte_pktmbuf_mtod(bufs[i], struct rte_ipv4_hdr *);
+                                ip_dst = rte_be_to_cpu_32(ip_hdr->dst_addr);
+                                ip_src = rte_be_to_cpu_32(ip_hdr->src_addr);
                         }
+                        else if (RTE_ETH_IS_IPV6_HDR(bufs[i]->packet_type)) {
+                                struct rte_ipv6_hdr *ip_hdr;
+                                ip_hdr = rte_pktmbuf_mtod(bufs[i], struct rte_ipv6_hdr *);
+                        }
+                        else{
+                                printf("\nCore %d,IP header doesn't match any type (ipv4 or ipv6)\n", rte_lcore_id());
+                        }
+
+                }
+
+                /* Send burst of TX packets, to second port of pair. */
+                const uint16_t nb_tx = rte_eth_tx_burst(port_dst, rte_lcore_id() - 1, bufs, nb_rx);
+
+                port_stats += nb_tx;
+                printf("\nCore %u forwarded %u packets via Port %u for a total of %lu packets\n",
+                               rte_lcore_id(), nb_tx, port_dst, port_stats);
+
+                /* Free any unsent packets. */
+                if (unlikely(nb_tx < nb_rx)) {
+                        uint16_t buf;
+                        for (buf = nb_tx; buf < nb_rx; buf++)
+                                rte_pktmbuf_free(bufs[buf]);
                 }
         }
-        /* >8 End of loop. */
 }
-/* >8 End Basic forwarding application lcore. */
+
+static int
+job_stat(void* arg)
+{
+        // args
+        struct arguments* args = (struct arguments*) arg;
+        uint16_t port_src = args->port_src;
+
+        struct rte_eth_stats stats = {0};
+        while (1){
+                /* Quit the app on Control+C */
+                if (force_quit)
+                {
+                        return 0;
+                }
+
+                // Get port stats
+                struct rte_eth_stats new_stats;
+                rte_eth_stats_get(port_src, &new_stats);
+                // Print stats
+                printf("\nNumber of received packets : %ld"
+                       "\nNumber of missed packets : %ld"
+                       "\nNumber of queued RX packets : %ld"
+                       "\nNumber of dropped queued packet : %ld\n\n"
+                        , new_stats.ipackets, new_stats.imissed, new_stats.q_ipackets[0], new_stats.q_errors[0]);
+                // Sleep for 1 second
+                sleep(1);
+        }
+}
 
 /*
  * The main function, which does initialization and calls the per-lcore
@@ -181,10 +241,16 @@ lcore_main(uint16_t port[])
 int
 main(int argc, char *argv[])
 {
+	// args
+        struct arguments args;
+
         struct rte_mempool *mbuf_pool;
         unsigned nb_ports = 2;
         uint16_t portid;
-        uint16_t port[2];
+	uint16_t lcore_id;
+
+        uint16_t port_src;
+	uint16_t port_dst;
 
         /* Initializion the Environment Abstraction Layer (EAL). 8< */
         int ret = rte_eal_init(argc, argv);
@@ -194,13 +260,6 @@ main(int argc, char *argv[])
 
         argc -= ret;
         argv += ret;
-
-        /* Check that there is an even number of ports to send/receive on. */
-        // nb_ports = rte_eth_dev_count_avail();
-/*
-        if (nb_ports < 2 || (nb_ports & 1))
-                rte_exit(EXIT_FAILURE, "Error: number of ports must be even\n");
-*/
 
         /* Initialize the 2 MAC addresses to exchange data */
         struct rte_ether_addr macAddr1;
@@ -220,12 +279,10 @@ main(int argc, char *argv[])
         macAddr2.addr_bytes[4]=0x5D;
         macAddr2.addr_bytes[5]=0x3C;
 
-        /* Creates a new mempool in memory to hold the mbufs. */
-
         /* Allocates mempool to hold the mbufs. 8< */
         mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
                 MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
-        /* >8 End of allocating mempool to hold mbuf. */
+
 
         if (mbuf_pool == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
@@ -243,13 +300,13 @@ main(int argc, char *argv[])
                 if(memcmp(&addr, &macAddr1, 6) == 0){
                         if (port_init(portid, mbuf_pool) != 0)
                                 rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n",portid);
-                        port[0] = portid;
+                        port_src = portid;
                 }
 
                 if(memcmp(&addr, &macAddr2, 6) == 0){
                         if (port_init(portid, mbuf_pool) != 0)
                                 rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n",portid);
-                        port[1] = portid;
+                        port_dst = portid;
                 }
         }
         /* >8 End of initializing all ports. */
@@ -257,9 +314,19 @@ main(int argc, char *argv[])
         if (rte_lcore_count() > 1)
                 printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
 
-        /* Call lcore_main on the main core only. Called on single lcore. 8< */
-        lcore_main(port);
-        /* >8 End of called on single lcore. */
+        args.port_src = port_src;
+        args.port_dst = port_dst;
+
+	/* MAIN : polling each queue on a lcore */
+        RTE_LCORE_FOREACH_WORKER(lcore_id)
+        {
+                if(lcore_id <= nb_core)
+                        rte_eal_remote_launch(job, &args, lcore_id);
+                if(lcore_id == 7)
+                        rte_eal_remote_launch(job_stat, &args, lcore_id);
+        }
+
+	 rte_eal_mp_wait_lcore();
 
         /* clean up the EAL */
         rte_eal_cleanup();
