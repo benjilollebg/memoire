@@ -24,28 +24,6 @@
 
 static volatile bool force_quit = false;
 
-static void
-signal_handler(int signum)
-{
-        if (signum == SIGINT || signum == SIGTERM) {
-                printf("\n\nSignal %d received, preparing to exit\n", signum);
-
-                struct rte_eth_stats stats = {0};
-
-                // Get port stats
-                struct rte_eth_stats new_stats;
-                rte_eth_stats_get(0, &new_stats);
-                // Print stats
-                printf("\nNumber of received packets : %ld"
-                       "\nNumber of missed packets : %ld"
-                       "\nNumber of queued RX packets : %ld"
-                       "\nNumber of dropped queued packet : %ld\n\n"
-                        , new_stats.ipackets, new_stats.imissed, new_stats.q_ipackets[0], new_stats.q_errors[0]);
-
-                force_quit = true;
-        }
-}
-
 /*
  * Initializes a given port using global settings and with the RX buffers
  * coming from the mbuf_pool passed as a parameter.
@@ -112,7 +90,28 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 
         return 0;
 }
-/* >8 End of main functional part of port initialization. */
+
+static void
+signal_handler(int signum)
+{
+        if (signum == SIGINT || signum == SIGTERM) {
+                printf("\n\nSignal %d received, preparing to exit\n", signum);
+
+	        struct rte_eth_stats stats = {0};
+
+                // Get port stats
+                struct rte_eth_stats new_stats;
+                rte_eth_stats_get(0, &new_stats);
+                // Print stats
+                printf("\nNumber of received packets : %ld"
+                       "\nNumber of missed packets : %ld"
+                       "\nNumber of queued RX packets : %ld"
+                       "\nNumber of dropped queued packet : %ld\n\n"
+                        , new_stats.ipackets, new_stats.imissed, new_stats.q_ipackets[0], new_stats.q_errors[0]);
+
+		force_quit = true;
+        }
+}
 
 /*
  * The lcore main. This is the main thread that does the work, reading from
@@ -144,8 +143,7 @@ lcore_main(uint16_t port)
         /* Main work of application loop. 8< */
         for (;;) {
 		if(force_quit)
-                        return 0;
-
+			return 0;
                 /* Get burst of RX packets, from first port of pair. */
                 struct rte_mbuf *bufs[BURST_SIZE];
                 const uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
@@ -155,16 +153,37 @@ lcore_main(uint16_t port)
 
                 port_stats += nb_rx;
 
-		/* Do a small job on each descriptor */
-/*		for (index = 0; index < nb_rx; index ++)
+		/* Do a small job on each descriptor on the ip field */
+		for (index = 0; index < nb_rx; index ++)
 		{
 			counter ++;
-			printf("\nReceived a total of %d packets\n", counter);
-		}
-*/
-                printf("\nPort %u received %u packets for a total of %lu packets\n", port, nb_rx, port_stats);
 
-                /* Free any unsent packets. */
+			/* if this is an IPv4 packet */
+			if (RTE_ETH_IS_IPV4_HDR(bufs[index]->packet_type)) {
+				struct rte_ipv4_hdr *ip_hdr;
+        			uint32_t ip_dst = 0;
+				uint32_t ip_src = 0;
+
+        			ip_hdr = rte_pktmbuf_mtod(bufs[index], struct rte_ipv4_hdr *);
+        			ip_dst = rte_be_to_cpu_32(ip_hdr->dst_addr);
+				ip_src = rte_be_to_cpu_32(ip_hdr->src_addr);
+
+				printf("\nReceived an IPv4 packet from %d for a total of %d packets\n", ip_src, counter);
+		        }
+			else if (RTE_ETH_IS_IPV6_HDR(bufs[index]->packet_type)) {
+        			struct rte_ipv6_hdr *ip_hdr;
+        			ip_hdr = rte_pktmbuf_mtod(bufs[index], struct rte_ipv6_hdr *);
+
+				printf("\nReceived an IPv6 packet from %hhn for a total of %d packets\n", ip_hdr->src_addr, counter);
+		        }
+			else{
+				printf("\nIP header doesn't match any type (ipv4 or ipv6)\n");
+			}
+		}
+
+//                printf("\nPort %u received %u packets for a total of %lu packets\n", port, nb_rx, port_stats);
+
+                /* Free all received packets. */
 		for (index = 0; index < nb_rx; index ++)
                         rte_pktmbuf_free(bufs[index]);
 
@@ -232,7 +251,6 @@ main(int argc, char *argv[])
         signal(SIGINT, signal_handler);
         signal(SIGTERM, signal_handler);
 
-        /* Call lcore_main on the main core only. Called on single lcore. 8< */
         lcore_main(port);
 
         /* clean up the EAL */
