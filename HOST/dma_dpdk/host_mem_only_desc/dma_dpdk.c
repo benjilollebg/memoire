@@ -46,13 +46,14 @@ DOCA_LOG_REGISTER(MAIN);
 
 #define DESCRIPTOR_NB 2048		 /* The number of descriptor in the ring (MAX uint16_t max val or change head-tail to uint16_t) */
 
-static uint32_t nb_core = 1;            /* The number of Core working on the NIC (max 7) */
+static uint32_t nb_core = 2;            /* The number of Core working on the NIC (max 7) */
 
 struct descriptor
 {
         void*                   buf_addr;
         int	                pkt_len;
         uint16_t                data_len;
+	uint32_t                ip_src;
 };
 
 static doca_error_t
@@ -120,6 +121,7 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *rings[], size_t size)
         size_t export_desc_len = 0;
 
 	int index;
+	int counter[nb_core];
         uint16_t head[nb_core];
         uint16_t tail[nb_core];
         uint16_t head_pos = sizeof(struct descriptor) * DESCRIPTOR_NB;
@@ -131,6 +133,7 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *rings[], size_t size)
         {
 		// Init the variable
 		//state[index] = {0};
+		counter[index] = 0;
 		head[index] = 0;
 		tail[index] = 0;
 		nb_pakt[index] = 0;
@@ -170,32 +173,36 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *rings[], size_t size)
 		}
 	}
 
-printf("pos 1 : %p, pos 2 : %p", rings[0], rings[1]);
-
 	struct descriptor *desc = {0};
-	int counter = 0;
 
 	/* Read the buffer */
 	for(;;)
 	{
 		for (index = 0; index < nb_core; index++)
 		{
-			// Load the head value
-			memcpy(&head[index], &rings[index][head_pos], sizeof(head));
-
 			if(tail[index] != head[index]){
 				//printf("tail : %d head : %d\n", tail[index], head[index]);
 				desc = (struct descriptor*) &rings[index][tail[index] * sizeof(struct descriptor)];
 
 				nb_pakt[index]++;
 
+//				if (counter[index] != desc->pkt_len){
+//					printf("counter didnt match : tail : %d, head : %d\n", tail[index], head[index]);
+//					return -1;
+//				}
+				counter[index]++;
+
 				tail[index]++;
 				if (tail[index] == DESCRIPTOR_NB)
                                 	tail[index] = 0;
 				// Set the tail value
-				memcpy(&rings[index][tail_pos], &tail[index], sizeof(tail));
+				memcpy(&rings[index][tail_pos], &tail[index], sizeof(tail[0]));
 
-				printf("Core : %d, Nombre de packet reçu : %ld\n", index + 1, nb_pakt[index]);
+				printf("Core : %d Received a packet with IP : %d for a total of : %ld\n", index + 1, desc->ip_src, nb_pakt[index]);
+			}
+			else{
+				// Load the head value
+                        	memcpy(&head[index], &rings[index][head_pos], sizeof(head[0]));
 			}
 		}
 	}
