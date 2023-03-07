@@ -75,7 +75,7 @@ DOCA_LOG_REGISTER(MAIN);
 
 struct rte_eth_stats eth_stats;
 static volatile bool force_quit = false;
-static uint32_t nb_core = 2;		/* The number of Core working (max 7) */
+static uint32_t nb_core = 1;		/* The number of Core working (max 7) */
 
 struct descriptor
 {
@@ -236,7 +236,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
         if (retval != 0)
                 return retval;
 
-        /* Allocate and set up NB_RX RX queue per Ethernet port. */
+        /* Allocate and set up NB_RX queue per Ethernet port. */
         for (q = 0; q < rx_rings; q++) {
                 retval = rte_eth_rx_queue_setup(port, q, nb_rxd,
                                 rte_eth_dev_socket_id(port), NULL, mbuf_pool);
@@ -517,7 +517,6 @@ job(void* arg)
                 if (unlikely(nb_rx == 0))
                         continue;
 
-		// read tail
 		/* Wait for the tail to not overwrite */
 		if (head + nb_rx >= DESCRIPTOR_NB){
 			set_buf_read(src_doca_buf, dst_doca_buf, &remote_addr[tail_pos], &ring[tail_pos], sizeof(tail));
@@ -778,7 +777,7 @@ main(int argc, char **argv)
         macAddr1.addr_bytes[5]=0x2A;
 
         /* DPDK : Creates a new mempool in memory to hold the mbufs. */
-        mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS,
+        mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", nb_core * NUM_MBUFS,
                 MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
         if (mbuf_pool == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
