@@ -61,6 +61,13 @@ DOCA_LOG_REGISTER(DMA_WRITE_DPU);
 #define DESCRIPTOR_NB 256	 	/* The number of descriptor in the ring (MAX 256 or change head-tail to uint16_t) */
 #define NUM_PORTS 1
 
+struct descriptor
+{
+        void*                   buf_addr;
+        int	                pkt_len;
+        uint16_t                data_len;
+};
+
 struct arguments
 {
         uint16_t                port;
@@ -83,12 +90,12 @@ struct lcore_queue_conf
 
 struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
 */
-static uint32_t nb_core = 2;
+static uint32_t nb_core = 1;
 
 static int
-port_init(uint16_t port, struct rte_mempool* mbuf_pool[])
+port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 {
-        const uint16_t rx_rings = nb_core;
+        const uint16_t rx_rings = 3;
         uint16_t nb_rxd = RX_RING_SIZE;
         int retval;
         uint16_t q;
@@ -130,7 +137,8 @@ port_init(uint16_t port, struct rte_mempool* mbuf_pool[])
 
         /* Allocate and set up 1 RX queue per Ethernet port. */
         for (q = 0; q < rx_rings; q++) {
-                retval = rte_eth_rx_queue_setup(port, q, nb_rxd, rte_eth_dev_socket_id(port), NULL, mbuf_pool[q]);
+                retval = rte_eth_rx_queue_setup(port, q, nb_rxd,
+                                rte_eth_dev_socket_id(port), NULL, mbuf_pool);
                 if (retval < 0)
                         return retval;
         }
@@ -173,16 +181,21 @@ job(void* arg)
 
 	// DPDK
 	uint64_t nb_pakt = 0;
+	uint64_t nb_pakt_q0 = 0;
+	uint64_t nb_pakt_q1 = 0;
+
+	size_t descriptor_size = sizeof(struct descriptor);
+
 
 	struct rte_mbuf *bufs[BURST_SIZE];
-
-	const uint8_t rx_q =  rte_lcore_id() - 1;
+        struct descriptor descriptors[BURST_SIZE];
 
         /* Main work of application loop */
         for (;;) {
                 /* DPDK : Get burst of RX packets from the port */
-                const uint16_t nb_rx = rte_eth_rx_burst(port, rx_q, bufs, BURST_SIZE);
+                uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
 
+		nb_pakt_q0 += nb_rx;
 		nb_pakt += nb_rx;
                 if (unlikely(nb_rx == 0))
                         continue;
@@ -193,11 +206,34 @@ job(void* arg)
                         rte_pktmbuf_free(bufs[i]);
                 }
 
-		printf("\nCore %u forwarded %u packets via DMA for a total of %lu packets\n",
-                       	        rte_lcore_id(), nb_rx, nb_pakt);
+                nb_rx = rte_eth_rx_burst(port, 1, bufs, BURST_SIZE);
+
+		nb_pakt_q1 += nb_rx;
+                nb_pakt += nb_rx;
+                if (unlikely(nb_rx == 0))
+                        continue;
+
+                for (int i = 0; i < nb_rx; i++) {
+                        rte_pktmbuf_free(bufs[i]);
+                }
+
+		nb_rx = rte_eth_rx_burst(port, 2, bufs, BURST_SIZE);
+
+                nb_pakt += nb_rx;
+                if (unlikely(nb_rx == 0))
+                        continue;
+
+                for (int i = 0; i < nb_rx; i++) {
+                        rte_pktmbuf_free(bufs[i]);
+                }
+
+		printf("\nCore %u forwarded %u packets via DMA for a total of %lu packets, q0 : %lu, q1 : %lu\n",
+                       	        rte_lcore_id(), nb_rx, nb_pakt, nb_pakt_q0, nb_pakt_q1);
+
+//		printf("\nCore %u forwarded %u packets via DMA for a total of %lu packets, q0 : %lu\n",
+//                                rte_lcore_id(), nb_rx, nb_pakt, nb_pakt_q0);
 	}
 
-	return 0;
 }
 
 
@@ -211,11 +247,16 @@ job(void* arg)
 int
 main(int argc, char **argv)
 {
+	// DOCA
+        struct doca_pci_bdf pcie_dev;
+        int result;
+
 	// args
         struct arguments args;
 
 	// DPDK
-	struct rte_mempool* mbuf_pool[nb_core];
+	struct rte_mempool *mbuf_pool;
+        unsigned nb_ports = 1;
         uint16_t portid;
 	uint16_t port;
 	int ret;
@@ -239,14 +280,11 @@ main(int argc, char **argv)
         macAddr1.addr_bytes[4]=0xFB;
         macAddr1.addr_bytes[5]=0x2A;
 
-	for (int i =0; i<nb_core; i++)
-	{
-		/* DPDK : Creates a new mempool in memory to hold the mbufs. */
-        	mbuf_pool[i] = rte_pktmbuf_pool_create("MEMPOOL" + i, NUM_MBUFS,
-                	MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
-	        if (mbuf_pool == NULL)
-        	        rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
-	}
+        /* DPDK : Creates a new mempool in memory to hold the mbufs. */
+        mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
+                MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+        if (mbuf_pool == NULL)
+                rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
         /* DPDK Initializing the desired port. */
         RTE_ETH_FOREACH_DEV(portid){
@@ -267,6 +305,13 @@ main(int argc, char **argv)
 
         if (rte_lcore_count() > 1)
                 printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
+
+	/* DOCA : */
+        result = parse_pci_addr("03:00.0", &pcie_dev);
+        if (result != DOCA_SUCCESS) {
+                DOCA_LOG_ERR("Failed to parse pci address: %s", doca_get_error_string(result));
+                return EXIT_FAILURE;
+        }
 
 	args.port = port;
 
