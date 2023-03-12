@@ -66,24 +66,7 @@ struct arguments
         uint16_t                port;
 };
 
-/*
- * =============================== DPDK =================================
- *
- * Initializes a given port using global settings and with the RX buffers
- * coming from the mbuf_pool passed as a parameter.
- *
- * =============================== DPDK =================================
- */
-/*
-struct lcore_queue_conf
-{
-    unsigned n_rx_port;
-    unsigned rx_port_list[MAX_RX_QUEUE_PER_LCORE];
-} __rte_cache_aligned;
-
-struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
-*/
-static uint32_t nb_core = 2;
+static uint32_t nb_core = 4;
 
 static int
 port_init(uint16_t port, struct rte_mempool* mbuf_pool[])
@@ -156,14 +139,6 @@ port_init(uint16_t port, struct rte_mempool* mbuf_pool[])
         return 0;
 }
 
-/*
- * Run DOCA DMA DPU copy sample
- *
- * @export_desc_file_path [in]: Export descriptor file path
- * @buffer_info_file_path [in]: Buffer info file path
- * @pcie_addr [in]: Device PCI address
- * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
- */
 static int
 job(void* arg)
 {
@@ -173,6 +148,7 @@ job(void* arg)
 
 	// DPDK
 	uint64_t nb_pakt = 0;
+	int counter;
 
 	struct rte_mbuf *bufs[BURST_SIZE];
 
@@ -180,34 +156,54 @@ job(void* arg)
 
         /* Main work of application loop */
         for (;;) {
-                /* DPDK : Get burst of RX packets from the port */
-                const uint16_t nb_rx = rte_eth_rx_burst(port, rx_q, bufs, BURST_SIZE);
+		/* DPDK : Get burst of RX packets from the port */
+                const uint32_t nb_rx = rte_eth_rx_burst(port, rx_q, bufs, BURST_SIZE);
 
+		if (counter > 10000){
+			printf("\nCore %u forwarded %u packets via DMA for a total of %lu packets\n",
+                                      rte_lcore_id(), nb_rx, nb_pakt);
+			counter = 0;
+		}
+
+		counter += nb_rx;
 		nb_pakt += nb_rx;
                 if (unlikely(nb_rx == 0))
                         continue;
 
                 /* Modify the descriptor */
                 for (int i = 0; i < nb_rx; i++) {
+			/* if this is an IPv4 packet */
+                if (RTE_ETH_IS_IPV4_HDR(bufs[i]->packet_type)) {
+                         struct rte_ipv4_hdr *ip_hdr;
+                         uint32_t ip_dst = 0;
+                         uint32_t ip_src = 0;
+
+                         ip_hdr = rte_pktmbuf_mtod(bufs[i], struct rte_ipv4_hdr *);
+                         ip_dst = rte_be_to_cpu_32(ip_hdr->dst_addr);
+                         ip_src = rte_be_to_cpu_32(ip_hdr->src_addr);
+                 }
+                 else if (RTE_ETH_IS_IPV6_HDR(bufs[i]->packet_type)) {
+                        struct rte_ipv6_hdr *ip_hdr;
+                        ip_hdr = rte_pktmbuf_mtod(bufs[i], struct rte_ipv6_hdr *);
+                 }
+                 else{
+                        printf("\nCore %d,IP header doesn't match any type (ipv4 or ipv6)\n", rte_lcore_id());
+                 }
+
                 	/* Free the mbuf */
                         rte_pktmbuf_free(bufs[i]);
                 }
 
-		printf("\nCore %u forwarded %u packets via DMA for a total of %lu packets\n",
-                       	        rte_lcore_id(), nb_rx, nb_pakt);
+//              printf("\nCore %u counter %u\n", rte_lcore_id(), counter);
+
+//		printf("\nCore %u forwarded %u packets via DMA for a total of %lu packets\n",
+  //                     	        rte_lcore_id(), counter, nb_pakt);
 	}
 
 	return 0;
 }
 
 
-/*
- * Sample main function
- *
- * @argc [in]: command line arguments size
- * @argv [in]: array of command line arguments
- * @return: EXIT_SUCCESS on success and EXIT_FAILURE otherwise
- */
 int
 main(int argc, char **argv)
 {

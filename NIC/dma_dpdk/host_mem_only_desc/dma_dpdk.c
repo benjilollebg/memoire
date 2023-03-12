@@ -354,6 +354,11 @@ job(void* arg)
 	char* ring;
 	size_t size;
 
+	// Data
+	struct timeval stop, start;
+	bool has_received_first_packet = false;
+
+
 	ts.tv_nsec = SLEEP_IN_NANOS;
 
 	/* DOCA : Create DMA context */
@@ -456,6 +461,7 @@ job(void* arg)
         dma_job_write.base.type = DOCA_DMA_JOB_MEMCPY;
         dma_job_write.base.flags = DOCA_JOB_FLAGS_NONE;
         dma_job_write.base.ctx = state.ctx;
+
         dma_job_write.dst_buff = dst_doca_buf;
         dma_job_write.src_buff = src_doca_buf;
 
@@ -485,6 +491,9 @@ job(void* arg)
 		{
 			printf("packet received : %ld, packet missed : %ld\n", eth_stats.q_ipackets[0], eth_stats.q_errors[0]);
 			printf("Exiting on core : %d\n", rte_lcore_id());
+
+			printf("\nCore %u forwarded via DMA for a total of %lu packets\n",
+                                        rte_lcore_id(), nb_pakt);
 
 			/* DOCA : Clean allocated memory */
         		if (doca_buf_refcount_rm(src_doca_buf, NULL) != DOCA_SUCCESS)
@@ -516,6 +525,13 @@ job(void* arg)
 
                 if (unlikely(nb_rx == 0))
                         continue;
+
+		/* Data : Start the timer */
+		if (nb_pakt > 0 && !has_received_first_packet)
+		{
+			gettimeofday(&start, NULL);
+			has_received_first_packet = true;
+		}
 
 		/* Wait for the tail to not overwrite */
 		if (head + nb_rx >= DESCRIPTOR_NB){
@@ -574,14 +590,10 @@ job(void* arg)
                                 ip_src = rte_be_to_cpu_32(ip_hdr->src_addr);
 
 				descriptors[i].ip_src = ip_src;
-
-                                printf("\nCore %d, Received an IPv4 packet from %d for a total of %d packets\n", rte_lcore_id(), ip_src, counter);
                         }
                         else if (RTE_ETH_IS_IPV6_HDR(bufs[i]->packet_type)) {
                                 struct rte_ipv6_hdr *ip_hdr;
                                 ip_hdr = rte_pktmbuf_mtod(bufs[i], struct rte_ipv6_hdr *);
-
-                                printf("\nCore %d,Received an IPv6 packet from %hhn for a total of %d packets\n", rte_lcore_id(), ip_hdr->src_addr, counter);
                         }
                         else{
                                 printf("\nCore %d,IP header doesn't match any type (ipv4 or ipv6)\n", rte_lcore_id());
@@ -653,12 +665,6 @@ job(void* arg)
                         free(ring);
                         dma_cleanup(&state, dma_ctx);
                 }
-
-		if (nb_pakt > threshold){
-			printf("\nCore %u forwarded %u packets via DMA for a total of %lu packets,tail : %d, head : %d\n",
-                        	        rte_lcore_id(), nb_rx, nb_pakt, tail, head);
-	      		threshold = threshold +1;
-		}
 	}
 }
 

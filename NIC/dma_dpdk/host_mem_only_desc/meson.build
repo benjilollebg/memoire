@@ -36,7 +36,7 @@ dependencies += dependency('libdpdk')
 
 srcs = [
         # The sample itself
-        'without_dma.c',
+        'dma_dpdk.c',
         # Common code for the DOCA library samples
         '/opt/mellanox/doca/samples/doca_dma/dma_common.c',
         # Common code for all DOCA samples
