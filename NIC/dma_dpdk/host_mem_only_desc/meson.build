@@ -36,7 +36,7 @@ dependencies += dependency('libdpdk')
 
 srcs = [
         # The sample itself
-        'dma_dpdk.c',
+        'only_dma.c',
         # Common code for the DOCA library samples
         '/opt/mellanox/doca/samples/doca_dma/dma_common.c',
         # Common code for all DOCA samples
@@ -45,6 +45,8 @@ srcs = [
         '/opt/mellanox/doca/applications/common/src/utils.c',
 	#
 	'../../../utils/set_dma_buffer.c',
+	'../../../utils/port_init.c',
+	'../../../utils/receive_data_from_host.c',
 ]
 
 inc_dirs  = []

@@ -9,4 +9,4 @@
 #include <rte_byteorder.h>
 
 static inline int
-port_init(uint16_t port, struct rte_mempool* mbuf_pool);
+port_init(uint16_t port, struct rte_mempool* mbuf_pool, uint8_t nb_core);
