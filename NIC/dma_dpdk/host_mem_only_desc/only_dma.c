@@ -70,12 +70,11 @@ DOCA_LOG_REGISTER(MAIN);
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 256			/* Has to be lower than the number of descriptor in the ring */
-#define DESCRIPTOR_NB 2048	 		/* The number of descriptor in the ring (MAX uint16_t max val or change head-tail type) */
+#define DESCRIPTOR_NB 2048 		/* The number of descriptor in the ring (MAX uint16_t max val or change head-tail type) */
 #define NB_PORTS 1
 
-struct rte_eth_stats eth_stats;
 static volatile bool force_quit = false;
-static uint32_t nb_core = 1;		/* The number of Core working (max 7) */
+static uint32_t nb_core = 7;		/* The number of Core working (max 7) */
 
 struct descriptor
 {
@@ -316,7 +315,7 @@ job(void* arg)
 	signal(SIGINT, signal_handler);
         signal(SIGTERM, signal_handler);
 
-	struct rte_mbuf* bufs[BURST_SIZE];
+//	struct rte_mbuf* bufs[BURST_SIZE];
         struct descriptor* descriptors = (struct descriptor*) &ring[16];
 	struct descriptor* remote_descriptors = (struct descriptor*) &remote_addr[16];
 
@@ -367,8 +366,8 @@ job(void* arg)
                 if (head + 256 >= DESCRIPTOR_NB){
                         set_buf_read(src_doca_buf, dst_doca_buf, remote_tail, tail, sizeof(uint64_t));
                         while(*tail > head || *tail <= head + 256 - DESCRIPTOR_NB){
-				usleep(1000);
-				printf("2 core : %d, tail : %d, head : %d timestamp : %d\n", rte_lcore_id(), *tail, head, timestamp);
+//				usleep(1000);
+//				printf("2 core : %d, tail : %d, head : %d timestamp : %d\n", rte_lcore_id(), *tail, head, timestamp);
                                 result = read_dma(dma_job_read, state, ts, event);
                                 if (result != DOCA_SUCCESS){
                                         doca_buf_refcount_rm(dst_doca_buf, NULL);
@@ -385,8 +384,8 @@ job(void* arg)
                 else {
                         set_buf_read(src_doca_buf, dst_doca_buf, remote_tail, tail, sizeof(uint64_t));
                         while(*tail > head && *tail <= head + 256){
-				usleep(1000);
-				printf("1 core : %d, tail : %d, head : %d timestamp : %d\n", rte_lcore_id(), *tail, head, timestamp);
+//				usleep(1000);
+//				printf("1 core : %d, tail : %d, head : %d timestamp : %d\n", rte_lcore_id(), *tail, head, timestamp);
                                 result = read_dma(dma_job_read, state, ts, event);
                                 if (result != DOCA_SUCCESS){
                                         doca_buf_refcount_rm(dst_doca_buf, NULL);
@@ -401,7 +400,7 @@ job(void* arg)
                         }
                 }
 
-		old_head = head;
+//		old_head = head;
 
 		for (int i = 0; i < 256; i++){
 			counter++;
@@ -409,7 +408,7 @@ job(void* arg)
 
 			descriptors[head].timestamp = timestamp;
 			descriptors[head].counter = counter;
-/*
+
 			set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[head],
 						&descriptors[head], sizeof(struct descriptor));
 
@@ -423,7 +422,7 @@ job(void* arg)
                                 printf("Core %d crashed while writing buffer\n", rte_lcore_id());
                                 return result;
                         }
-*/
+
 			head++;
 			if(head == DESCRIPTOR_NB)
 				head = 0;
@@ -431,7 +430,7 @@ job(void* arg)
 
 
 		/* Write the new descriptors in the dma buffer */
-                if (old_head + 256 <= DESCRIPTOR_NB)
+/*                if (old_head + 256 <= DESCRIPTOR_NB)
                 {
                         set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[old_head],
                                         &descriptors[old_head], 256*sizeof(struct descriptor));
@@ -450,8 +449,6 @@ job(void* arg)
                 }
                 else
                 {
-			printf("SHOULDNT BE HERE\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
-			return 1;
                         set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[old_head],
                                         &descriptors[old_head], (DESCRIPTOR_NB - old_head) * sizeof(struct descriptor));
 
@@ -468,7 +465,7 @@ job(void* arg)
                         }
 
                         set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[0], &descriptors[0],
-                                        (old_head + 256 - DESCRIPTOR_NB + 1) * sizeof(struct descriptor));
+                                        (old_head + 256 - DESCRIPTOR_NB) * sizeof(struct descriptor));
 
                         result = write_dma(dma_job_write, state, ts, event);
                         if (result != DOCA_SUCCESS){
@@ -482,22 +479,6 @@ job(void* arg)
                                 return result;
                         }
                 }
-
-
-	                /* Write the head in the dma buffer */
-/*        	        set_buf_write(src_doca_buf, dst_doca_buf, &remote_addr[8], head, sizeof(uint64_t));
-
-                	result = write_dma(dma_job_write, state, ts, event);
-                	if (result != DOCA_SUCCESS){
-                        	doca_buf_refcount_rm(dst_doca_buf, NULL);
- 	                        doca_buf_refcount_rm(src_doca_buf, NULL);
-        	                doca_mmap_destroy(remote_mmap);
-                	        free(ring);
-                        	dma_cleanup(&state, dma_ctx);
-
-        	                printf("Core %d crashed while writing head\n", rte_lcore_id());
-                	        return result;
-                	}
 */
 	}
 }
@@ -520,7 +501,7 @@ main(int argc, char **argv)
         int result;
 
 	// DPDK
-	uint16_t lcore_id;
+        uint16_t lcore_id;
 
 	/* DPDK : Initializion the Environment Abstraction Layer (EAL) */
         result = rte_eal_init(argc, argv);
@@ -530,9 +511,8 @@ main(int argc, char **argv)
         argc -= result;
         argv += result;
 
-//	force_quit = false;
-
 	printf("Number of core enabled : %d\n", nb_core);
+
 
 	/* DOCA : */
         result = parse_pci_addr(PCIE_ADDR, &pcie_dev);

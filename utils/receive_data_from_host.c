@@ -74,7 +74,7 @@ receive_data_from_host(char *export_desc, size_t *export_desc_len, char **remote
         }
         *remote_addr_len = strtoull(buffer, NULL, 0);
 
-        printf("Core %d, remote_addr : %lld", rte_lcore_id(), strtoull(buffer, NULL, 0));
+        printf("Core %d, remote_addr : %lld\n", rte_lcore_id(), strtoull(buffer, NULL, 0));
         printf("Core %d, export_desc : %s\n", rte_lcore_id(), export_desc);
         printf("Core %d, export_desc_len : %ld\n", rte_lcore_id(), *export_desc_len);
         printf("Core %d, remote_addr_len : %ld\n", rte_lcore_id(), *remote_addr_len);

@@ -10,7 +10,7 @@
  *
  * =============================== DPDK =================================
  */
-static inline int
+int
 port_init(uint16_t port, struct rte_mempool *mbuf_pool, uint8_t nb_core)
 {
         const uint16_t rx_rings = nb_core;
