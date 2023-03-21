@@ -45,6 +45,8 @@ srcs = [
         '/opt/mellanox/doca/applications/common/src/utils.c',
 	#
 	'../../../utils/set_dma_buffer.c',
+	'../../../utils/port_init.c',
+	'../../../utils/receive_data_from_host.c',
 ]
 
 inc_dirs  = []

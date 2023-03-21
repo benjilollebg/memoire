@@ -80,12 +80,12 @@ static uint32_t nb_core = 5;		/* The number of Core working (max 7) */
 
 struct descriptor
 {
+        uint64_t                timestamp;
+        uint64_t                counter;
 	uint32_t                ip_src;
         uint32_t                ip_dst;
-	uint64_t 		timestamp;
-	bool                    full;
 };
-//attribute packed
+
 struct arguments
 {
 	struct doca_pci_bdf*	pcie_addr;
@@ -122,7 +122,23 @@ write_dma(struct doca_dma_job_memcpy dma_job, struct program_core_objects state,
                 return result;
         }
 
-	doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE);
+	//doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE);
+
+        /* DOCA : Wait for job completion */
+        while ((result = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
+                DOCA_ERROR_AGAIN) {
+                nanosleep(&ts, &ts);
+        }
+        if (result != DOCA_SUCCESS) {
+                DOCA_LOG_ERR("Failed to retrieve DMA job: %s", doca_get_error_string(result));
+                return result;
+        }
+
+        result = (doca_error_t)event.result.u64;
+        if (result != DOCA_SUCCESS) {
+                DOCA_LOG_ERR("DMA job event returned unsuccessfully: %s", doca_get_error_string(result));
+                return result;
+        }
 
 	return DOCA_SUCCESS;
 }
@@ -197,8 +213,10 @@ job(void* arg)
         char *remote_addr = NULL;
         size_t remote_addr_len = 0, export_desc_len = 0;
 
-	// RING
-	uint64_t pos = 0;
+	// DPDK
+	uint64_t* tail;
+	uint64_t* remote_tail;
+	uint64_t head = 0;
 	char* ring;
 	size_t size;
 
@@ -311,20 +329,20 @@ job(void* arg)
         dma_job_read.dst_buff = src_doca_buf;
         dma_job_read.src_buff = dst_doca_buf;
 
+	tail = (uint64_t*) &ring[0];
+	remote_tail = (uint64_t*) &remote_addr[0];
+
 	signal(SIGINT, signal_handler);
         signal(SIGTERM, signal_handler);
 
-	struct rte_mbuf* rte_mbufs[BURST_SIZE];
-        struct descriptor* descriptors = (struct descriptor*) &ring[0];
-	struct descriptor* remote_descriptors = (struct descriptor*) &remote_addr[0];
+//	struct rte_mbuf* bufs[BURST_SIZE];
+        struct descriptor* descriptors = (struct descriptor*) &ring[16];
+	struct descriptor* remote_descriptors = (struct descriptor*) &remote_addr[16];
 
 	uint64_t counter = 0;
 	uint64_t threshold = 0;
 	uint64_t timestamp = 0;
-	uint64_t old_pos = 0;
-	uint64_t new_pos = 0;
-
-	srand( time( NULL ) );
+	uint64_t old_head = 0;
 
         /* Main work of application loop */
         for (;;)
@@ -335,8 +353,8 @@ job(void* arg)
 		{
 			printf("Exiting on core : %d\n", rte_lcore_id());
 
-			printf("\nCore %u pos : %lu counter : %ld\n",
-                                        rte_lcore_id(), pos, counter);
+			printf("\nCore %u head : %lu tail : %lu, counter : %ld\n",
+                                        rte_lcore_id(), head, *tail, counter);
 
 			/* DOCA : Clean allocated memory */
         		if (doca_buf_refcount_rm(src_doca_buf, NULL) != DOCA_SUCCESS)
@@ -359,85 +377,83 @@ job(void* arg)
 			return result;
 		}
 
-		/* DPDK : Get burst of RX packets from the port */
-                //const uint16_t nb_rx = rte_eth_rx_burst(port, rte_lcore_id() - 1, rte_mbufs, BURST_SIZE);
-
-		uint16_t nb_rx = rand() % DESCRIPTOR_NB;
-
-	printf("rand : %d\n", nb_rx);
-
-                if (nb_rx == 0)
-                        continue;
-
-                /* Data : Start the timer */
-                if (counter > 0 && !has_received_first_packet)
-                {
-                        gettimeofday(&start, NULL);
-                        has_received_first_packet = true;
-                }
-
-
 		if (counter > threshold){
 			printf("Core %d, counter : %lu\n", rte_lcore_id(), counter);
 			threshold += 100000;
 		}
 
-		old_pos = pos;
-		new_pos = (pos + nb_rx) % DESCRIPTOR_NB;
+		/* Wait for the tail to not overwrite */
+                if (head + 256 >= DESCRIPTOR_NB){
+                        set_buf_read(src_doca_buf, dst_doca_buf, remote_tail, tail, sizeof(uint64_t));
+                        while(*tail > head || *tail <= head + 256 - DESCRIPTOR_NB){
+//				usleep(1000);
+//				printf("2 core : %d, tail : %d, head : %d timestamp : %d\n", rte_lcore_id(), *tail, head, timestamp);
+                                result = read_dma(dma_job_read, state, ts, event);
+                                if (result != DOCA_SUCCESS){
+                                        doca_buf_refcount_rm(dst_doca_buf, NULL);
+                                        doca_buf_refcount_rm(src_doca_buf, NULL);
+                                        doca_mmap_destroy(remote_mmap);
+                                        free(ring);
+                                        dma_cleanup(&state, dma_ctx);
 
-		/* Wait for the server to empty the descriptors to not overwrite */
-                while (descriptors[new_pos].full){
-                        set_buf_read(src_doca_buf, dst_doca_buf, &remote_descriptors[new_pos], &descriptors[new_pos], sizeof(struct descriptor));
-                        result = read_dma(dma_job_read, state, ts, event);
+                                        printf("Core %d crashed while readind tail\n", rte_lcore_id());
+                                        return result;
+                                }
+                        }
+                }
+                else {
+                        set_buf_read(src_doca_buf, dst_doca_buf, remote_tail, tail, sizeof(uint64_t));
+                        while(*tail > head && *tail <= head + 256){
+//				usleep(1000);
+//				printf("1 core : %d, tail : %d, head : %d timestamp : %d\n", rte_lcore_id(), *tail, head, timestamp);
+                                result = read_dma(dma_job_read, state, ts, event);
+                                if (result != DOCA_SUCCESS){
+                                        doca_buf_refcount_rm(dst_doca_buf, NULL);
+                                        doca_buf_refcount_rm(src_doca_buf, NULL);
+                                        doca_mmap_destroy(remote_mmap);
+                                        free(ring);
+                                        dma_cleanup(&state, dma_ctx);
+
+                                        printf("Core %d crashed while readind tail\n", rte_lcore_id());
+                                        return result;
+                                }
+                        }
+                }
+
+//		old_head = head;
+//printf("Core %d, counter : %lu\n", rte_lcore_id(), counter);
+		for (int i = 0; i < 256; i++){
+			counter++;
+			timestamp++;
+
+			descriptors[head].timestamp = timestamp;
+			descriptors[head].counter = counter;
+/*
+			set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[head],
+						&descriptors[head], sizeof(struct descriptor));
+
+                        result = write_dma(dma_job_write, state, ts, event);
                         if (result != DOCA_SUCCESS){
                                 doca_buf_refcount_rm(dst_doca_buf, NULL);
                                 doca_buf_refcount_rm(src_doca_buf, NULL);
                                 doca_mmap_destroy(remote_mmap);
                                 free(ring);
                                 dma_cleanup(&state, dma_ctx);
-
-                                printf("Core %d crashed while readind tail\n", rte_lcore_id());
+                                printf("Core %d crashed while writing buffer\n", rte_lcore_id());
                                 return result;
                         }
-                }
-
-		for (int i = 0; i < nb_rx; i++){
-			counter++;
-			timestamp++;
-
-			descriptors[pos].full = 1;
-			descriptors[pos].timestamp = timestamp;
-/*
-			if (RTE_ETH_IS_IPV4_HDR(rte_mbufs[i]->packet_type)) {
-                                struct rte_ipv4_hdr *ip_hdr;
-                                uint32_t ip_dst = 0;
-                                uint32_t ip_src = 0;
-
-                                ip_hdr = rte_pktmbuf_mtod(rte_mbufs[i], struct rte_ipv4_hdr *);
-                                ip_dst = rte_be_to_cpu_32(ip_hdr->dst_addr);
-                                ip_src = rte_be_to_cpu_32(ip_hdr->src_addr);
-
-                                descriptors[pos].ip_src = ip_src;
-				descriptors[pos].ip_dst = ip_dst;
-                        }
-                        else{
-                                printf("\nCore %d,IP header doesn't match a type ipv4\n", rte_lcore_id());
-                        }
 */
-                        /* Free the mbuf */
-                        rte_pktmbuf_free(rte_mbufs[i]);
-
-			pos++;
-			if(pos == DESCRIPTOR_NB)
-				pos = 0;
+			head++;
+			if(head == DESCRIPTOR_NB)
+				head = 0;
 		}
 
 
 		/* Write the new descriptors in the dma buffer */
-                if (old_pos + nb_rx <= DESCRIPTOR_NB)
+                if (old_head + 256 <= DESCRIPTOR_NB)
                 {
-                        set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[old_pos],
-                                        &descriptors[old_pos], nb_rx * sizeof(struct descriptor));
+                        set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[old_head],
+                                        &descriptors[old_head], 256*sizeof(struct descriptor));
 
                         result = write_dma(dma_job_write, state, ts, event);
                         if (result != DOCA_SUCCESS){
@@ -451,10 +467,10 @@ job(void* arg)
                         }
 
                 }
-		else
+                else
                 {
-                        set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[old_pos],
-                                        &descriptors[old_pos], (DESCRIPTOR_NB - old_pos) * sizeof(struct descriptor));
+                        set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[old_head],
+                                        &descriptors[old_head], (DESCRIPTOR_NB - old_head) * sizeof(struct descriptor));
 
                         result = write_dma(dma_job_write, state, ts, event);
                         if (result != DOCA_SUCCESS){
@@ -469,7 +485,7 @@ job(void* arg)
                         }
 
                         set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[0], &descriptors[0],
-                                        (old_pos + nb_rx - DESCRIPTOR_NB) * sizeof(struct descriptor));
+                                        (old_head + 256 - DESCRIPTOR_NB) * sizeof(struct descriptor));
 
                         result = write_dma(dma_job_write, state, ts, event);
                         if (result != DOCA_SUCCESS){
@@ -510,7 +526,7 @@ main(int argc, char **argv)
         uint16_t portid;
         uint16_t port;
 
-	printf("size : %ld\n",  sizeof(struct descriptor));
+	printf("size : %d",  sizeof(struct descriptor));
 
 	/* DPDK : Initializion the Environment Abstraction Layer (EAL) */
         result = rte_eal_init(argc, argv);
@@ -565,7 +581,7 @@ main(int argc, char **argv)
         }
 
 	args.pcie_addr = &pcie_dev;
-	args.port = port;
+	args.port = 0;
 
 	/* MAIN : polling each queue on a lcore */
         RTE_LCORE_FOREACH_WORKER(lcore_id)

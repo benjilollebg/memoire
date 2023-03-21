@@ -3,25 +3,39 @@
 #define RX_RING_SIZE 1024
 
 /*
+ * =============================== DPDK =================================
+ *
  * Initializes a given port using global settings and with the RX buffers
  * coming from the mbuf_pool passed as a parameter.
+ *
+ * =============================== DPDK =================================
  */
-
-/* Main functional part of port initialization. 8< */
-static inline int
-port_init(uint16_t port, struct rte_mempool *mbuf_pool)
+int
+port_init(uint16_t port, struct rte_mempool *mbuf_pool, uint8_t nb_core)
 {
-        struct rte_eth_conf port_conf;
-        const uint16_t rx_rings = 1;
+        const uint16_t rx_rings = nb_core;
         uint16_t nb_rxd = RX_RING_SIZE;
         int retval;
         uint16_t q;
         struct rte_eth_dev_info dev_info;
 
+	static struct rte_eth_conf port_conf = {
+                .rxmode = {
+                        .mq_mode = ETH_MQ_RX_RSS,
+                },
+                .rx_adv_conf = {
+                        .rss_conf = {
+                                .rss_key = NULL,
+                                .rss_hf = ETH_RSS_IP | ETH_RSS_TCP | ETH_RSS_UDP,
+                        },
+                },
+                .txmode = {
+                        .mq_mode = ETH_MQ_TX_NONE,
+                },
+        };
+
         if (!rte_eth_dev_is_valid_port(port))
                 return -1;
-
-        memset(&port_conf, 0, sizeof(struct rte_eth_conf));
 
         retval = rte_eth_dev_info_get(port, &dev_info);
         if (retval != 0) {
@@ -54,16 +68,6 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
         if (retval < 0)
                 return retval;
 
-        /* Display the port MAC address. */
-        struct rte_ether_addr addr;
-        retval = rte_eth_macaddr_get(port, &addr);
-        if (retval != 0)
-                return retval;
-/*
-        printf("Port %u MAC: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
-                           " %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
-                        port, RTE_ETHER_ADDR_BYTES(&addr));
-*/
         /* Enable RX in promiscuous mode for the Ethernet device. */
         retval = rte_eth_promiscuous_enable(port);
         /* End of setting RX port in promiscuous mode. */

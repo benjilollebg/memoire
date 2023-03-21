@@ -8,5 +8,5 @@
 #include <rte_mbuf.h>
 #include <rte_byteorder.h>
 
-static inline int
-port_init(uint16_t port, struct rte_mempool* mbuf_pool);
+int
+port_init(uint16_t port, struct rte_mempool* mbuf_pool, uint8_t nb_core);
