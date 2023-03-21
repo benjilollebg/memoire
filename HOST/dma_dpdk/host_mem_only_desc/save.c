@@ -40,7 +40,7 @@
 
 #define IP "192.168.100.2"
 #define PORT 6660
-#define PCIE_ADDR "01:00.1"
+#define PCIE_ADDR "01:00.0"
 
 DOCA_LOG_REGISTER(MAIN);
 
@@ -48,10 +48,10 @@ DOCA_LOG_REGISTER(MAIN);
 
 struct descriptor
 {
+        uint64_t                timestamp;
+        uint64_t                counter;
 	uint32_t                ip_src;
 	uint32_t                ip_dst;
-	uint64_t                timestamp;
-	bool                    full;
 };
 
 static uint32_t nb_core = 5;            /* The number of Core working on the NIC (max 7) */
@@ -121,18 +121,21 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *rings[], size_t size)
         size_t export_desc_len = 0;
 
 	int index;
-	uint64_t counter[nb_core];
-        uint64_t pos[nb_core];
+	int counter[nb_core];
+        uint64_t tail[nb_core];
+        uint64_t head[nb_core];
 	uint64_t timestamp[nb_core];
-	struct descriptor* descriptors[nb_core];
+
+	uint64_t nb_pakt[nb_core];
 
 	for (index = 0; index < nb_core; index++)
         {
 		// Init the variable
 		counter[index] = 0;
-		pos[index] = 0;
+		tail[index] = 0;
+		head[index] = 0;
 		timestamp[index] = 0;
-		descriptors[index] = (struct descriptor*) rings[index];
+		nb_pakt[index] = 0;
 
 		/* DOCA : Open the relevant DOCA device */
         	result = open_doca_device_with_pci(pcie_addr, &dma_jobs_is_supported, &state[index].dev);
@@ -169,33 +172,32 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *rings[], size_t size)
 		}
 	}
 
+	struct descriptor *desc = {0};
+
 	/* Read the buffer */
 	for(;;)
 	{
 //usleep(1000);
 		for (index = 0; index < nb_core; index++)
 		{
-//			if(descriptors[index][pos[index]].full == 0)
-//				printf("core : %d empty %lu counter : %lu\n",index+1, counter[index]);
+			desc = (struct descriptor*) &rings[index][head[index] * sizeof(struct descriptor) + 16];
 
-			if(descriptors[index][pos[index]].full == 1){
+			if(desc->timestamp != timestamp[index]+1)
+				printf("core : %d timestamp : %lu expected : %lu tail : %lu, head : %lu\n",index+1, desc->timestamp,timestamp[index]+1,tail[index], head[index]);
+
+			if(desc->timestamp == timestamp[index]+1){
 
 //				printf("core %d, timestamp : %lu\n",index+1, desc->timestamp);
-				counter[index]++;
-                                timestamp[index]++;
+				tail[index]++;
+				if(tail[index] == DESCRIPTOR_NB)
+                                        tail[index] = 0;
+				memcpy(&rings[index][0], &tail[index], sizeof(uint64_t));
 
-				if (descriptors[index][pos[index]].timestamp != timestamp[index])
-				{
-					printf("Core %d : wrong timestamp, expected : %lu, received : %lu\n",
-						index+1, timestamp[index], descriptors[index][pos[index]].timestamp);
-					return 1;
-				}
+				timestamp[index]++;
 
-				descriptors[index][pos[index]].full = 0;
-
-				pos[index]++;
-	                        if(pos[index] == DESCRIPTOR_NB)
-        	                        pos[index] = 0;
+				head[index]++;
+	                        if(head[index] == DESCRIPTOR_NB)
+        	                        head[index] = 0;
 			}
 		}
 	}
@@ -225,7 +227,7 @@ main(int argc, char **argv)
 	// DOCA
         struct doca_pci_bdf pcie_dev;
 	char* rings[nb_core];
-	size_t size = sizeof(struct descriptor) * DESCRIPTOR_NB;
+	size_t size = sizeof(struct descriptor) * DESCRIPTOR_NB + 16; /* +4 for the head and tail (2 * sizeof(uint16_t) */
 	doca_error_t result;
 
 	 /* parse application arguments (after the EAL ones) */
