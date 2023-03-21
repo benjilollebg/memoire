@@ -74,7 +74,7 @@ DOCA_LOG_REGISTER(MAIN);
 #define NB_PORTS 1
 
 static volatile bool force_quit = false;
-static uint32_t nb_core = 7;		/* The number of Core working (max 7) */
+static uint32_t nb_core = 2;		/* The number of Core working (max 7) */
 
 struct descriptor
 {

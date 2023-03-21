@@ -76,7 +76,7 @@ DOCA_LOG_REGISTER(MAIN);
 #define NB_PORTS 1
 
 static volatile bool force_quit = false;
-static uint32_t nb_core = 5;		/* The number of Core working (max 7) */
+static uint32_t nb_core = 3;		/* The number of Core working (max 7) */
 
 struct descriptor
 {
@@ -360,11 +360,9 @@ job(void* arg)
 		}
 
 		/* DPDK : Get burst of RX packets from the port */
-                //const uint16_t nb_rx = rte_eth_rx_burst(port, rte_lcore_id() - 1, rte_mbufs, BURST_SIZE);
+                const uint16_t nb_rx = rte_eth_rx_burst(port, rte_lcore_id() - 1, rte_mbufs, BURST_SIZE);
 
-		uint16_t nb_rx = rand() % DESCRIPTOR_NB;
-
-	printf("rand : %d\n", nb_rx);
+//		uint16_t nb_rx = rand() % 256;
 
                 if (nb_rx == 0)
                         continue;
