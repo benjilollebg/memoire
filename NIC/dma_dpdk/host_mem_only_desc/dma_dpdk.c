@@ -49,7 +49,7 @@ DOCA_LOG_REGISTER(MAIN);
 #define RECV_BUF_SIZE 256		/* Buffer which contains config information */
 
 
-#define WORKQ_DEPTH 1024		/* Work queue depth : MAY CAUSE CRASH IF TOO LOW (be cause we don't wait for termination)
+#define WORKQ_DEPTH 1024  		/* Work queue depth : MAY CAUSE CRASH IF TOO LOW (be cause we don't wait for termination)
 					 * if WORKQ_DEPTH < DESCRIPTOR_NB, too many dma jobs may saturate the queue
 					 * /!\ REDEFINITION of value defined in dma_common.h /!\
 					 */
@@ -76,14 +76,14 @@ DOCA_LOG_REGISTER(MAIN);
 #define NB_PORTS 1
 
 static volatile bool force_quit = false;
-static uint32_t nb_core = 3;		/* The number of Core working (max 7) */
+static uint32_t nb_core = 1;		/* The number of Core working (max 7) */
 
 struct descriptor
 {
-	uint32_t                ip_src;
-        uint32_t                ip_dst;
-	uint64_t 		timestamp;
-	bool                    full;
+	volatile uint32_t                ip_src;
+        volatile uint32_t                ip_dst;
+	volatile uint64_t 		timestamp;
+	volatile bool           full;
 };
 //attribute packed
 struct arguments
@@ -123,6 +123,23 @@ write_dma(struct doca_dma_job_memcpy dma_job, struct program_core_objects state,
         }
 
 	doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE);
+
+/*
+        while ((result = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
+                DOCA_ERROR_AGAIN) {
+                nanosleep(&ts, &ts);
+        }
+        if (result != DOCA_SUCCESS) {
+                DOCA_LOG_ERR("Failed to retrieve DMA job: %s", doca_get_error_string(result));
+                return result;
+        }
+
+        result = (doca_error_t)event.result.u64;
+        if (result != DOCA_SUCCESS) {
+                DOCA_LOG_ERR("DMA job event returned unsuccessfully: %s", doca_get_error_string(result));
+                return result;
+        }
+*/
 
 	return DOCA_SUCCESS;
 }
@@ -360,9 +377,10 @@ job(void* arg)
 		}
 
 		/* DPDK : Get burst of RX packets from the port */
-                const uint16_t nb_rx = rte_eth_rx_burst(port, rte_lcore_id() - 1, rte_mbufs, BURST_SIZE);
+//                const uint16_t nb_rx = rte_eth_rx_burst(port, rte_lcore_id() - 1, rte_mbufs, BURST_SIZE);
 
-//		uint16_t nb_rx = rand() % 256;
+		uint16_t nb_rx = rand() % BURST_SIZE;
+//		uint16_t nb_rx = BURST_SIZE;
 
                 if (nb_rx == 0)
                         continue;
@@ -384,7 +402,11 @@ job(void* arg)
 		new_pos = (pos + nb_rx) % DESCRIPTOR_NB;
 
 		/* Wait for the server to empty the descriptors to not overwrite */
+//                while (descriptors[new_pos].full && (descriptors[new_pos].timestamp != timestamp + nb_rx - DESCRIPTOR_NB
+//			|| descriptors[new_pos].timestamp == 0)){
+
                 while (descriptors[new_pos].full){
+
                         set_buf_read(src_doca_buf, dst_doca_buf, &remote_descriptors[new_pos], &descriptors[new_pos], sizeof(struct descriptor));
                         result = read_dma(dma_job_read, state, ts, event);
                         if (result != DOCA_SUCCESS){
@@ -405,6 +427,24 @@ job(void* arg)
 
 			descriptors[pos].full = 1;
 			descriptors[pos].timestamp = timestamp;
+
+//			printf("Core %d timestamp : %ld\n", rte_lcore_id(), timestamp);
+/*
+			set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[pos],
+                                        &descriptors[pos], sizeof(struct descriptor));
+
+                        result = write_dma(dma_job_write, state, ts, event);
+                        if (result != DOCA_SUCCESS){
+                                doca_buf_refcount_rm(dst_doca_buf, NULL);
+                                doca_buf_refcount_rm(src_doca_buf, NULL);
+                                doca_mmap_destroy(remote_mmap);
+                                free(ring);
+                                dma_cleanup(&state, dma_ctx);
+                                printf("Core %d crashed while writing buffer\n", rte_lcore_id());
+                                return result;
+                        }
+*/
+
 /*
 			if (RTE_ETH_IS_IPV4_HDR(rte_mbufs[i]->packet_type)) {
                                 struct rte_ipv4_hdr *ip_hdr;
@@ -423,7 +463,7 @@ job(void* arg)
                         }
 */
                         /* Free the mbuf */
-                        rte_pktmbuf_free(rte_mbufs[i]);
+//                        rte_pktmbuf_free(rte_mbufs[i]);
 
 			pos++;
 			if(pos == DESCRIPTOR_NB)
