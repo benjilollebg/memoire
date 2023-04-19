@@ -19,10 +19,17 @@
 
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 256
+#define BURST_SIZE 4
 #define NUM_PORTS 1
 
 static volatile bool force_quit = false;
+
+struct __attribute__((aligned(64))) descriptor
+{
+        volatile uint32_t       ip_src;
+        volatile uint32_t       ip_dst;
+        volatile uint64_t       timestamp;
+};
 
 /*
  * Initializes a given port using global settings and with the RX buffers
@@ -118,7 +125,7 @@ signal_handler(int signum)
  * an input port and writing to an output port.
  */
 
- /* Basic forwarding application lcore. 8< */
+ /* Basic forwarding application lcore.*/
 static int
 lcore_main(uint16_t port)
 {
@@ -138,13 +145,14 @@ lcore_main(uint16_t port)
         printf("\nCore %u counting incoming packets. [Ctrl+C to quit]\n",
                         rte_lcore_id());
 
-	int counter = 0;
-	int index;
+	uint64_t counter = 0;
+	uint64_t timestamp = 0;
+	uint64_t index;
         /* Main work of application loop. 8< */
         for (;;) {
 		if(force_quit)
 		{
-			printf("\nReceived a total of %d packets\n", counter);
+			printf("\nReceived a total of %ld packets\n", counter);
 			return 0;
 		}
                 /* Get burst of RX packets, from first port of pair. */
@@ -160,28 +168,8 @@ lcore_main(uint16_t port)
 		for (index = 0; index < nb_rx; index ++)
 		{
 			counter ++;
-
-			/* if this is an IPv4 packet */
-			if (RTE_ETH_IS_IPV4_HDR(bufs[index]->packet_type)) {
-				struct rte_ipv4_hdr *ip_hdr;
-        			uint32_t ip_dst = 0;
-				uint32_t ip_src = 0;
-
-        			ip_hdr = rte_pktmbuf_mtod(bufs[index], struct rte_ipv4_hdr *);
-        			ip_dst = rte_be_to_cpu_32(ip_hdr->dst_addr);
-				ip_src = rte_be_to_cpu_32(ip_hdr->src_addr);
-
-//				printf("\nReceived an IPv4 packet from %d for a total of %d packets\n", ip_src, counter);
-		        }
-			else if (RTE_ETH_IS_IPV6_HDR(bufs[index]->packet_type)) {
-        			struct rte_ipv6_hdr *ip_hdr;
-        			ip_hdr = rte_pktmbuf_mtod(bufs[index], struct rte_ipv6_hdr *);
-
-//				printf("\nReceived an IPv6 packet from %hhn for a total of %d packets\n", ip_hdr->src_addr, counter);
-		        }
-			else{
-				printf("\nIP header doesn't match any type (ipv4 or ipv6)\n");
-			}
+			struct descriptor* desc = bufs[index]->buf_addr;
+			printf("timestamp : %ld\n", desc->timestamp);
 		}
 
 //                printf("\nPort %u received %u packets for a total of %lu packets\n", port, nb_rx, port_stats);
@@ -203,7 +191,7 @@ main(int argc, char *argv[])
         struct rte_mempool *mbuf_pool;
         unsigned nb_ports = 1;
         uint16_t portid;
-        uint16_t port;
+        uint16_t port = 99;
 
         /* Initializion the Environment Abstraction Layer (EAL). 8< */
         int ret = rte_eal_init(argc, argv);
@@ -238,7 +226,12 @@ main(int argc, char *argv[])
                 int retval = rte_eth_macaddr_get(portid, &addr);
                 if (retval != 0)
                         return retval;
-
+/*
+		char buf[RTE_ETHER_ADDR_FMT_SIZE];
+    		rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, &addr);
+    		printf("%s\n", buf);
+*/
+		printf( "coucou\n");
                 /* Only init the two desired port (depending on the specified MAC address) */
                 if(memcmp(&addr, &macAddr1, 6) == 0){
                         if (port_init(portid, mbuf_pool) != 0)
