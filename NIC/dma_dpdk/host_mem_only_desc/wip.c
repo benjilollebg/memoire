@@ -76,14 +76,14 @@ DOCA_LOG_REGISTER(MAIN);
 #define NB_PORTS 1
 
 static volatile bool force_quit = false;
-static uint32_t nb_core = 5;		/* The number of Core working (max 7) */
+static uint32_t nb_core = 7;		/* The number of Core working (max 7) */
 
 struct descriptor
 {
-        uint64_t                timestamp;
-        uint64_t                counter;
-	uint32_t                ip_src;
-        uint32_t                ip_dst;
+        volatile uint32_t                ip_src;
+        volatile uint32_t                ip_dst;
+        volatile uint64_t       timestamp;
+        volatile bool           full;
 };
 
 struct arguments
@@ -93,15 +93,6 @@ struct arguments
 };
 
 #define MAX_DMA_BUF_SIZE BURST_SIZE*sizeof(struct descriptor)       /* DMA buffer maximum size */
-
-static void
-signal_handler(int signum)
-{
-        if (signum == SIGINT || signum == SIGTERM) {
-                printf("\n\nSignal %d received, preparing to exit\n", signum);
-                force_quit = true;
-        }
-}
 
 doca_error_t
 write_dma(struct doca_dma_job_memcpy dma_job, struct program_core_objects state, struct timespec ts, struct doca_event event)
@@ -122,10 +113,10 @@ write_dma(struct doca_dma_job_memcpy dma_job, struct program_core_objects state,
                 return result;
         }
 
-	//doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE);
+	doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE);
 
         /* DOCA : Wait for job completion */
-        while ((result = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
+/*        while ((result = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
                 DOCA_ERROR_AGAIN) {
                 nanosleep(&ts, &ts);
         }
@@ -139,7 +130,7 @@ write_dma(struct doca_dma_job_memcpy dma_job, struct program_core_objects state,
                 DOCA_LOG_ERR("DMA job event returned unsuccessfully: %s", doca_get_error_string(result));
                 return result;
         }
-
+*/
 	return DOCA_SUCCESS;
 }
 
@@ -329,15 +320,9 @@ job(void* arg)
         dma_job_read.dst_buff = src_doca_buf;
         dma_job_read.src_buff = dst_doca_buf;
 
-	tail = (uint64_t*) &ring[0];
-	remote_tail = (uint64_t*) &remote_addr[0];
-
-	signal(SIGINT, signal_handler);
-        signal(SIGTERM, signal_handler);
-
 //	struct rte_mbuf* bufs[BURST_SIZE];
-        struct descriptor* descriptors = (struct descriptor*) &ring[16];
-	struct descriptor* remote_descriptors = (struct descriptor*) &remote_addr[16];
+        struct descriptor* descriptors = (struct descriptor*) &ring[0];
+	struct descriptor* remote_descriptors = (struct descriptor*) &remote_addr[0];
 
 	uint64_t counter = 0;
 	uint64_t threshold = 0;
@@ -348,158 +333,43 @@ job(void* arg)
         for (;;)
 	{
 
-		/* Quit the app on Control+C */
-		if (force_quit)
-		{
-			printf("Exiting on core : %d\n", rte_lcore_id());
-
-			printf("\nCore %u head : %lu tail : %lu, counter : %ld\n",
-                                        rte_lcore_id(), head, *tail, counter);
-
-			/* DOCA : Clean allocated memory */
-        		if (doca_buf_refcount_rm(src_doca_buf, NULL) != DOCA_SUCCESS)
-                		DOCA_LOG_ERR("Failed to remove DOCA source buffer reference count");
-        		if (doca_buf_refcount_rm(dst_doca_buf, NULL) != DOCA_SUCCESS)
-                		DOCA_LOG_ERR("Failed to remove DOCA destination buffer reference count");
-
-      			/* DOCA : Destroy remote memory map */
-        		if (doca_mmap_destroy(remote_mmap) != DOCA_SUCCESS)
-                		DOCA_LOG_ERR("Failed to destroy remote memory map");
-
-        		/* DOCA : Inform host that DMA operation is done */
-        		DOCA_LOG_INFO("DMA cleaned up");
-
-        		/* DOCA : Clean and destroy all relevant objects */
-        		dma_cleanup(&state, dma_ctx);
-
-        		free(ring);
-
-			return result;
-		}
-
-		if (counter > threshold){
-			printf("Core %d, counter : %lu\n", rte_lcore_id(), counter);
+		if (timestamp > threshold){
+			printf("Core %d, counter : %lu\n", rte_lcore_id(), timestamp);
 			threshold += 100000;
 		}
 
-		/* Wait for the tail to not overwrite */
-                if (head + 256 >= DESCRIPTOR_NB){
-                        set_buf_read(src_doca_buf, dst_doca_buf, remote_tail, tail, sizeof(uint64_t));
-                        while(*tail > head || *tail <= head + 256 - DESCRIPTOR_NB){
-//				usleep(1000);
-//				printf("2 core : %d, tail : %d, head : %d timestamp : %d\n", rte_lcore_id(), *tail, head, timestamp);
-                                result = read_dma(dma_job_read, state, ts, event);
-                                if (result != DOCA_SUCCESS){
-                                        doca_buf_refcount_rm(dst_doca_buf, NULL);
-                                        doca_buf_refcount_rm(src_doca_buf, NULL);
-                                        doca_mmap_destroy(remote_mmap);
-                                        free(ring);
-                                        dma_cleanup(&state, dma_ctx);
-
-                                        printf("Core %d crashed while readind tail\n", rte_lcore_id());
-                                        return result;
-                                }
-                        }
-                }
-                else {
-                        set_buf_read(src_doca_buf, dst_doca_buf, remote_tail, tail, sizeof(uint64_t));
-                        while(*tail > head && *tail <= head + 256){
-//				usleep(1000);
-//				printf("1 core : %d, tail : %d, head : %d timestamp : %d\n", rte_lcore_id(), *tail, head, timestamp);
-                                result = read_dma(dma_job_read, state, ts, event);
-                                if (result != DOCA_SUCCESS){
-                                        doca_buf_refcount_rm(dst_doca_buf, NULL);
-                                        doca_buf_refcount_rm(src_doca_buf, NULL);
-                                        doca_mmap_destroy(remote_mmap);
-                                        free(ring);
-                                        dma_cleanup(&state, dma_ctx);
-
-                                        printf("Core %d crashed while readind tail\n", rte_lcore_id());
-                                        return result;
-                                }
-                        }
-                }
-
-//		old_head = head;
-//printf("Core %d, counter : %lu\n", rte_lcore_id(), counter);
-		for (int i = 0; i < 256; i++){
-			counter++;
-			timestamp++;
-
-			descriptors[head].timestamp = timestamp;
-			descriptors[head].counter = counter;
-/*
-			set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[head],
-						&descriptors[head], sizeof(struct descriptor));
-
-                        result = write_dma(dma_job_write, state, ts, event);
+                while (descriptors[0].full){
+                        set_buf_read(src_doca_buf, dst_doca_buf, &remote_descriptors[0], &descriptors[0], sizeof(struct descriptor));
+                        result = read_dma(dma_job_read, state, ts, event);
                         if (result != DOCA_SUCCESS){
                                 doca_buf_refcount_rm(dst_doca_buf, NULL);
                                 doca_buf_refcount_rm(src_doca_buf, NULL);
                                 doca_mmap_destroy(remote_mmap);
                                 free(ring);
                                 dma_cleanup(&state, dma_ctx);
-                                printf("Core %d crashed while writing buffer\n", rte_lcore_id());
+
+                                printf("Core %d crashed while readind tail\n", rte_lcore_id());
                                 return result;
                         }
-*/
-			head++;
-			if(head == DESCRIPTOR_NB)
-				head = 0;
+                }
+
+		timestamp++;
+		descriptors[0].timestamp = timestamp;
+		descriptors[0].full = 1;
+
+		set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[0],
+					&descriptors[0], sizeof(struct descriptor));
+
+                result = write_dma(dma_job_write, state, ts, event);
+                if (result != DOCA_SUCCESS){
+                        doca_buf_refcount_rm(dst_doca_buf, NULL);
+                        doca_buf_refcount_rm(src_doca_buf, NULL);
+                        doca_mmap_destroy(remote_mmap);
+                        free(ring);
+                        dma_cleanup(&state, dma_ctx);
+                        printf("Core %d crashed while writing buffer\n", rte_lcore_id());
+                        return result;
 		}
-
-
-		/* Write the new descriptors in the dma buffer */
-                if (old_head + 256 <= DESCRIPTOR_NB)
-                {
-                        set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[old_head],
-                                        &descriptors[old_head], 256*sizeof(struct descriptor));
-
-                        result = write_dma(dma_job_write, state, ts, event);
-                        if (result != DOCA_SUCCESS){
-                                doca_buf_refcount_rm(dst_doca_buf, NULL);
-                                doca_buf_refcount_rm(src_doca_buf, NULL);
-                                doca_mmap_destroy(remote_mmap);
-                                free(ring);
-                                dma_cleanup(&state, dma_ctx);
-                                printf("Core %d crashed while writing buffer\n", rte_lcore_id());
-                                return result;
-                        }
-
-                }
-                else
-                {
-                        set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[old_head],
-                                        &descriptors[old_head], (DESCRIPTOR_NB - old_head) * sizeof(struct descriptor));
-
-                        result = write_dma(dma_job_write, state, ts, event);
-                        if (result != DOCA_SUCCESS){
-                                doca_buf_refcount_rm(dst_doca_buf, NULL);
-                                doca_buf_refcount_rm(src_doca_buf, NULL);
-                                doca_mmap_destroy(remote_mmap);
-                                free(ring);
-                                dma_cleanup(&state, dma_ctx);
-
-                                printf("Core %d crashed while writing buffer first part\n", rte_lcore_id());
-                                return result;
-                        }
-
-                        set_buf_write(src_doca_buf, dst_doca_buf, &remote_descriptors[0], &descriptors[0],
-                                        (old_head + 256 - DESCRIPTOR_NB) * sizeof(struct descriptor));
-
-                        result = write_dma(dma_job_write, state, ts, event);
-                        if (result != DOCA_SUCCESS){
-                                doca_buf_refcount_rm(dst_doca_buf, NULL);
-                                doca_buf_refcount_rm(src_doca_buf, NULL);
-                                doca_mmap_destroy(remote_mmap);
-                                free(ring);
-                                dma_cleanup(&state, dma_ctx);
-
-                                printf("Core %d crashed while writing buffer second part\n", rte_lcore_id());
-                                return result;
-                        }
-                }
-
 	}
 }
 
