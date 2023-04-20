@@ -57,11 +57,10 @@ struct __attribute__((aligned(64))) descriptor
 	volatile uint32_t       ip_src;
 	volatile uint32_t       ip_dst;
 	volatile uint64_t       timestamp;
-	volatile char		who;
 	volatile bool           full;
 };
 
-static uint32_t nb_core = 1;            /* The number of Core working on the NIC (max 7) */
+static uint32_t nb_core = 2;            /* The number of Core working on the NIC (max 7) */
 static volatile bool force_quit = false;
 
 static void
@@ -141,8 +140,6 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *rings[], size_t size)
 	int core = 0;
 	uint64_t counter[nb_core];
         uint64_t pos[nb_core];
-	volatile uint64_t* head[nb_core];
-	uint64_t* tail[nb_core];
 	uint64_t timestamp[nb_core];
 	struct descriptor* descriptors[nb_core];
 
@@ -151,10 +148,8 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *rings[], size_t size)
 		// Init the variable
 		counter[index] = 0;
 		pos[index] = 0;
-		tail[index] = (uint64_t*) rings[index];
-		head[index] = (uint64_t*) (rings[index] + sizeof(uint64_t));
 		timestamp[index] = 0;
-		descriptors[index] = (struct descriptor*) (rings[index] + 2*sizeof(uint64_t));
+		descriptors[index] = (struct descriptor*) rings[index];
 
 		/* DOCA : Open the relevant DOCA device */
         	result = open_doca_device_with_pci(pcie_addr, &dma_jobs_is_supported, &state[index].dev);
@@ -199,52 +194,40 @@ dma_read(struct doca_pci_bdf *pcie_addr, char *rings[], size_t size)
 	/* Read the buffer */
 	for(;;)
 	{
-//usleep(1000);
 		for (core = 0; core < nb_core; core++)
 		{
-//			if(descriptors[core][pos[core]].full == 0)
-//				printf("core : %d empty %lu counter : %lu\n",core+1, counter[core])	;
-		if (force_quit)
-                {
-			for(int i =0;i<DESCRIPTOR_NB; i++){
-				printf("descriptor[%d] timestamp : %ld full : %d\n", i, descriptors[core][i].timestamp, descriptors[core][i].full);
-			}
+			if (force_quit)
+        	        {
+				for(int i =0;i<DESCRIPTOR_NB; i++){
+					printf("descriptor[%d] timestamp : %ld full : %d\n", i, descriptors[core][i].timestamp, descriptors[core][i].full);
+				}
 
-			printf("local timstamp : %ld\n", timestamp[core]);
-                        printf("descriptor : %lu pos : %ld, full : %d\n", descriptors[core][pos[core]].timestamp, *tail[core], descriptors[core][*tail[core]].full);
-			printf("descriptor+1 : %lu pos : %ld, full : %d\n", descriptors[core][pos[core] +1].timestamp, *tail[core] +1 , descriptors[core][*tail[core]+1].full);
-                        return 0;
-                }
-debug("tail : %ld head : %ld desc : %d\n", *tail[core], *head[core],descriptors[core][*tail[core]].full);
-			if(*tail[core] != *head[core] && descriptors[core][*tail[core]].full){
+				printf("local timstamp : %ld\n", timestamp[core]);
+                        	printf("descriptor : %lu pos : %ld, full : %d\n", descriptors[core][pos[core]].timestamp, pos[core], descriptors[core][pos[core]].full);
+				printf("descriptor+1 : %lu pos : %ld, full : %d\n", descriptors[core][pos[core] +1].timestamp, pos[core] +1 , descriptors[core][pos[core]+1].full);
+                        	return 0;
+                	}
+
+			if(descriptors[core][pos[core]].full){
 
 				rte_io_rmb();
 
-				debug("core %d, timestamp : %lu pos : %ld\n",core+1, descriptors[core][*tail[core]].timestamp, pos[core]);
 				counter[core]++;
                                 timestamp[core]++;
 
-				if (descriptors[core][*tail[core]].timestamp != timestamp[core])
+				if (descriptors[core][pos[core]].timestamp != timestamp[core])
 				{
 					printf("Core %d : wrong timestamp, expected : %lu, received : %lu\n",
-						index+1, timestamp[core], descriptors[core][*tail[core]].timestamp);
-
-					sleep(1);
-
-					printf("Core %d : wrong timestamp, expected : %lu, received : %lu\n",
-                                                core+1, timestamp[core], descriptors[core][*tail[core]].timestamp);
+						index+1, timestamp[core], descriptors[core][pos[core]].timestamp);
 
 					return 1;
 				}
 
-				descriptors[core][pos[core]].who = 'H';
 				descriptors[core][pos[core]].full = 0;
-				debug("descriptor : %lu pos : %ld, full : %d, head : %ld\n", timestamp[core], *tail[core], descriptors[core][*tail[core]].full, *head[core]);
 
 				pos[core]++;
 	                        if(pos[core] == DESCRIPTOR_NB)
         	                        pos[core] = 0;
-				*tail[core] = pos[core];
 			}
 		}
 	}
@@ -274,7 +257,7 @@ main(int argc, char **argv)
 	// DOCA
         struct doca_pci_bdf pcie_dev;
 	char* rings[nb_core];
-	size_t size = sizeof(struct descriptor) * DESCRIPTOR_NB + 2*sizeof(uint64_t);
+	size_t size = sizeof(struct descriptor) * DESCRIPTOR_NB;
 	doca_error_t result;
 
 	 /* parse application arguments (after the EAL ones) */
