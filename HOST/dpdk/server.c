@@ -29,6 +29,7 @@ struct __attribute__((aligned(64))) descriptor
         volatile uint32_t       ip_src;
         volatile uint32_t       ip_dst;
         volatile uint64_t       timestamp;
+	volatile uint32_t       pkt_len;
 };
 
 /*
@@ -129,7 +130,6 @@ signal_handler(int signum)
 static int
 lcore_main(uint16_t port)
 {
-        uint64_t port_stats = 0;
 
         /*
          * Check that the port is on the same NUMA node as the polling thread
@@ -142,12 +142,14 @@ lcore_main(uint16_t port)
                                 "not be optimal.\n", port);
 
 
-        printf("\nCore %u counting incoming packets. [Ctrl+C to quit]\n",
-                        rte_lcore_id());
+        printf("\nCore %u counting incoming packets on port : %d. [Ctrl+C to quit]\n",
+                        rte_lcore_id(), port);
 
 	uint64_t counter = 0;
 	uint64_t timestamp = 0;
 	uint64_t index;
+	struct descriptor* desc;
+
         /* Main work of application loop. 8< */
         for (;;) {
 		if(force_quit)
@@ -162,22 +164,34 @@ lcore_main(uint16_t port)
                 if (unlikely(nb_rx == 0))
                          continue;
 
-                port_stats += nb_rx;
-
 		/* Do a small job on each descriptor on the ip field */
 		for (index = 0; index < nb_rx; index ++)
 		{
-			counter ++;
-			struct descriptor* desc = bufs[index]->buf_addr;
-			printf("timestamp : %ld\n", desc->timestamp);
+			void* addr = bufs[index]->buf_addr;
+			int pos = 0;
+
+			while(pos != bufs[index]->pkt_len)
+			{
+				desc = (struct descriptor*) addr;
+
+				printf("timestamp : %ld\n", desc->timestamp);
+				timestamp++;
+				printf("len : %d", desc->pkt_len);
+
+
+				pos += sizeof(struct descriptor);
+				pos += desc->pkt_len;
+
+				addr += sizeof(struct descriptor) + desc->pkt_len;
+			}
+
+			counter++;
+
+	                /* Free all received packets. */
+			rte_pktmbuf_free(bufs[index]);
 		}
 
-//                printf("\nPort %u received %u packets for a total of %lu packets\n", port, nb_rx, port_stats);
-
-                /* Free all received packets. */
-		for (index = 0; index < nb_rx; index ++)
-                        rte_pktmbuf_free(bufs[index]);
-
+//                printf("\nPort %u received %u packets for a total of %lu packets\n", port, nb_rx, counter);
         }
 }
 
@@ -231,7 +245,7 @@ main(int argc, char *argv[])
     		rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, &addr);
     		printf("%s\n", buf);
 */
-		printf( "coucou\n");
+
                 /* Only init the two desired port (depending on the specified MAC address) */
                 if(memcmp(&addr, &macAddr1, 6) == 0){
                         if (port_init(portid, mbuf_pool) != 0)
