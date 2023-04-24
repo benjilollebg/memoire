@@ -27,7 +27,7 @@ dependencies += dependency('libdpdk')
 
 srcs = [
         # The sample itself
-        'ip.c',
+        'server.c',
 	# The dpdk utils (to inititiate the port)
 #	'../../../utils/port_init.c',
 ]
@@ -36,7 +36,7 @@ inc_dirs  = []
 #
 inc_dirs += include_directories('../../../utils')
 
-executable('ip', srcs,
+executable('server', srcs,
         dependencies : dependencies,
 	include_directories: inc_dirs,
         install: false)
