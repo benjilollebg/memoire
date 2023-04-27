@@ -17,6 +17,7 @@
 
 #define RX_RING_SIZE 1024
 
+#define RTE_MBUF_HUGE_SIZE 10000
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 4
@@ -24,12 +25,12 @@
 
 static volatile bool force_quit = false;
 
-struct __attribute__((aligned(64))) descriptor
+struct descriptor
 {
         volatile uint32_t       ip_src;
         volatile uint32_t       ip_dst;
         volatile uint64_t       timestamp;
-	volatile uint32_t       pkt_len;
+        volatile uint32_t       data_len;
 };
 
 /*
@@ -154,7 +155,7 @@ lcore_main(uint16_t port)
         for (;;) {
 		if(force_quit)
 		{
-			printf("\nReceived a total of %ld packets\n", counter);
+			printf("\nReceived %ld packets for a total of %ld\n", counter, timestamp);
 			return 0;
 		}
                 /* Get burst of RX packets, from first port of pair. */
@@ -164,25 +165,27 @@ lcore_main(uint16_t port)
                 if (unlikely(nb_rx == 0))
                          continue;
 
+//		printf("pkt_len : %d\n", bufs[0]->pkt_len);
+
 		/* Do a small job on each descriptor on the ip field */
 		for (index = 0; index < nb_rx; index ++)
 		{
-			void* addr = bufs[index]->buf_addr;
-			int pos = 0;
+			uint64_t offset = 0;
 
-			while(pos != bufs[index]->pkt_len)
+			while(offset < bufs[index]->pkt_len)
 			{
-				desc = (struct descriptor*) addr;
+//				printf("desc pos : %ld ", offset);
+				desc = (struct descriptor*) (rte_pktmbuf_mtod(bufs[index], char*) + offset);
 
-				printf("timestamp : %ld\n", desc->timestamp);
+//				printf("timestamp : %ld, ", desc->timestamp);
 				timestamp++;
-				printf("len : %d", desc->pkt_len);
+//				printf("len : %d, ", desc->data_len);
 
 
-				pos += sizeof(struct descriptor);
-				pos += desc->pkt_len;
+				offset += sizeof(struct descriptor);
+				offset += desc->data_len;
 
-				addr += sizeof(struct descriptor) + desc->pkt_len;
+//				printf("offset : %ld\n", offset);
 			}
 
 			counter++;
@@ -228,7 +231,7 @@ main(int argc, char *argv[])
 
         /* Creates a new mempool in memory to hold the mbufs. */
         mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
-                MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+                MBUF_CACHE_SIZE, 0, RTE_MBUF_HUGE_SIZE, rte_socket_id());
         if (mbuf_pool == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 

@@ -13,36 +13,25 @@
 #include <rte_byteorder.h>
 #include <signal.h>
 
+//#include <../../../utils/port_init.h>
+
 #define RX_RING_SIZE 1024
 
+#define RTE_MBUF_HUGE_SIZE 10000
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 256
+#define BURST_SIZE 4
 #define NUM_PORTS 1
 
 static volatile bool force_quit = false;
 
-static void
-signal_handler(int signum)
+struct descriptor
 {
-        if (signum == SIGINT || signum == SIGTERM) {
-                printf("\n\nSignal %d received, preparing to exit\n", signum);
-
-                struct rte_eth_stats stats = {0};
-
-                // Get port stats
-                struct rte_eth_stats new_stats;
-                rte_eth_stats_get(0, &new_stats);
-                // Print stats
-                printf("\nNumber of received packets : %ld"
-                       "\nNumber of missed packets : %ld"
-                       "\nNumber of queued RX packets : %ld"
-                       "\nNumber of dropped queued packet : %ld\n\n"
-                        , new_stats.ipackets, new_stats.imissed, new_stats.q_ipackets[0], new_stats.q_errors[0]);
-
-                force_quit = true;
-        }
-}
+        volatile uint32_t       ip_src;
+        volatile uint32_t       ip_dst;
+        volatile uint64_t       timestamp;
+        volatile uint32_t       data_len;
+};
 
 /*
  * Initializes a given port using global settings and with the RX buffers
@@ -110,18 +99,38 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 
         return 0;
 }
-/* >8 End of main functional part of port initialization. */
+
+static void
+signal_handler(int signum)
+{
+        if (signum == SIGINT || signum == SIGTERM) {
+                printf("\n\nSignal %d received, preparing to exit\n", signum);
+
+	        struct rte_eth_stats stats = {0};
+
+                // Get port stats
+                struct rte_eth_stats new_stats;
+                rte_eth_stats_get(0, &new_stats);
+                // Print stats
+                printf("\nNumber of received packets : %ld"
+                       "\nNumber of missed packets : %ld"
+                       "\nNumber of queued RX packets : %ld"
+                       "\nNumber of dropped queued packet : %ld\n\n"
+                        , new_stats.ipackets, new_stats.imissed, new_stats.q_ipackets[0], new_stats.q_errors[0]);
+
+		force_quit = true;
+        }
+}
 
 /*
  * The lcore main. This is the main thread that does the work, reading from
  * an input port and writing to an output port.
  */
 
- /* Basic forwarding application lcore. 8< */
+ /* Basic forwarding application lcore.*/
 static int
 lcore_main(uint16_t port)
 {
-        uint64_t port_stats = 0;
 
         /*
          * Check that the port is on the same NUMA node as the polling thread
@@ -134,19 +143,21 @@ lcore_main(uint16_t port)
                                 "not be optimal.\n", port);
 
 
-        printf("\nCore %u counting incoming packets. [Ctrl+C to quit]\n",
-                        rte_lcore_id());
+        printf("\nCore %u counting incoming packets on port : %d. [Ctrl+C to quit]\n",
+                        rte_lcore_id(), port);
 
-	int counter = 0;
-	int index;
+	uint64_t counter = 0;
+	uint64_t timestamp = 0;
+	uint64_t index;
+	struct descriptor* desc;
+
         /* Main work of application loop. 8< */
         for (;;) {
 		if(force_quit)
 		{
-	                printf("\nPort %u received a total of %lu packets\n", port, port_stats);
-                        return 0;
+			printf("\nReceived %ld packets for a total of %ld\n", counter, timestamp);
+			return 0;
 		}
-
                 /* Get burst of RX packets, from first port of pair. */
                 struct rte_mbuf *bufs[BURST_SIZE];
                 const uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
@@ -154,20 +165,36 @@ lcore_main(uint16_t port)
                 if (unlikely(nb_rx == 0))
                          continue;
 
-                port_stats += nb_rx;
+//		printf("pkt_len : %d\n", bufs[0]->pkt_len);
 
-		/* Do a small job on each descriptor */
-/*		for (index = 0; index < nb_rx; index ++)
-		{
-			counter ++;
-			printf("\nReceived a total of %d packets\n", counter);
-		}
-*/
-
-                /* Free any unsent packets. */
+		/* Do a small job on each descriptor on the ip field */
 		for (index = 0; index < nb_rx; index ++)
-                        rte_pktmbuf_free(bufs[index]);
+		{
+			uint64_t offset = 0;
 
+			while(offset < bufs[index]->pkt_len)
+			{
+//				printf("desc pos : %ld ", offset);
+				desc = (struct descriptor*) (rte_pktmbuf_mtod(bufs[index], char*) + offset);
+
+//				printf("timestamp : %ld, ", desc->timestamp);
+				timestamp++;
+//				printf("len : %d, ", desc->data_len);
+
+
+				offset += sizeof(struct descriptor);
+				offset += desc->data_len;
+
+//				printf("offset : %ld\n", offset);
+			}
+
+			counter++;
+
+	                /* Free all received packets. */
+			rte_pktmbuf_free(bufs[index]);
+		}
+
+//                printf("\nPort %u received %u packets for a total of %lu packets\n", port, nb_rx, counter);
         }
 }
 
@@ -181,7 +208,7 @@ main(int argc, char *argv[])
         struct rte_mempool *mbuf_pool;
         unsigned nb_ports = 1;
         uint16_t portid;
-        uint16_t port;
+        uint16_t port = 99;
 
         /* Initializion the Environment Abstraction Layer (EAL). 8< */
         int ret = rte_eal_init(argc, argv);
@@ -204,7 +231,7 @@ main(int argc, char *argv[])
 
         /* Creates a new mempool in memory to hold the mbufs. */
         mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
-                MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+                MBUF_CACHE_SIZE, 0, RTE_MBUF_HUGE_SIZE, rte_socket_id());
         if (mbuf_pool == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
@@ -216,6 +243,11 @@ main(int argc, char *argv[])
                 int retval = rte_eth_macaddr_get(portid, &addr);
                 if (retval != 0)
                         return retval;
+/*
+		char buf[RTE_ETHER_ADDR_FMT_SIZE];
+    		rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, &addr);
+    		printf("%s\n", buf);
+*/
 
                 /* Only init the two desired port (depending on the specified MAC address) */
                 if(memcmp(&addr, &macAddr1, 6) == 0){
@@ -232,7 +264,6 @@ main(int argc, char *argv[])
         signal(SIGINT, signal_handler);
         signal(SIGTERM, signal_handler);
 
-        /* Call lcore_main on the main core only. Called on single lcore. 8< */
         lcore_main(port);
 
         /* clean up the EAL */
