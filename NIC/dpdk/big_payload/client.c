@@ -15,13 +15,14 @@
 #define RX_RING_SIZE 1024
 #define TX_RING_SIZE 1024
 
+#define RTE_MBUF_HUGE_SIZE 10000
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 32
 #define NUM_PORTS 2
 
 static volatile bool force_quit = false;
-static uint32_t nb_core = 1;            	/* The number of Core working (max 7) */
+static uint32_t nb_core = 5;            	/* The number of Core working (max 7) */
 struct rte_mempool *mbuf_pool;
 
 
@@ -31,12 +32,12 @@ struct arguments
         uint16_t        port_dst;
 };
 
-struct __attribute__((aligned(64))) descriptor
+struct descriptor
 {
         volatile uint32_t       ip_src;
         volatile uint32_t       ip_dst;
         volatile uint64_t       timestamp;
-	volatile uint32_t	pkt_len;
+	volatile uint32_t	data_len;
 };
 
 static void
@@ -180,23 +181,31 @@ job(void* arg)
 
 		/* Allocate the packet in the mbuf_pool */
 		pkt = rte_pktmbuf_alloc(mbuf_pool);
+		if (pkt == NULL) {
+        		printf("Failed to allocate mbuf\n");
+        		return 1;
+    		}
 		pkt_len = 0;
 
 		/* Modify the descriptor */
                 for (int i = 0; i < nb_rx; i++) {
 
-			struct descriptor* desc = rte_pktmbuf_mtod(pkt, struct descriptor*);
-			desc->timestamp = timestamp;
+			struct descriptor* desc = (struct descriptor*) (rte_pktmbuf_mtod(pkt, char*) + pkt_len);
 			timestamp++;
+			desc->timestamp = timestamp;
+			desc->data_len = bufs[i]->data_len;
 
 			pkt_len += sizeof(struct descriptor);
 
-			void* payload = rte_pktmbuf_mtod(pkt, void*) + pkt_len;
-			memcpy(payload, bufs[i]->buf_addr, bufs[i]->pkt_len);
+			char* payload = rte_pktmbuf_mtod(pkt, char*) + pkt_len;
+			memcpy(payload, bufs[i]->buf_addr, bufs[i]->data_len);
 
-			pkt_len += bufs[i]->pkt_len;
+			pkt_len += bufs[i]->data_len;
+
+//printf("desc pos: %ld, timestamp : %d, desc offset : %d, packet len : %d\n",pkt_len-bufs[i]->data_len-sizeof(struct descriptor), timestamp, desc->data_len, pkt_len);
 
                         /* if this is an IPv4 packet */
+
                         if (RTE_ETH_IS_IPV4_HDR(bufs[i]->packet_type)) {
                                 struct rte_ipv4_hdr *ip_hdr;
 
@@ -211,16 +220,23 @@ job(void* arg)
                         else{
                                 printf("\nCore %d,IP header doesn't match any type (ipv4 or ipv6)\n", rte_lcore_id());
                         }
-
-			rte_pktmbuf_free(bufs[i]);
+rte_pktmbuf_free(bufs[i]);
                 }
+
+		pkt->data_len = pkt_len;
+		pkt->pkt_len = pkt_len;
 
                 /* Send burst of TX packets, to second port of pair. */
                 const uint16_t nb_tx = rte_eth_tx_burst(port_dst, rte_lcore_id() - 1, &pkt, 1);
 
                 counter += nb_tx;
-                printf("\nCore %u forwarded %u packets via Port %u for a total of %lu packets\n",
-				rte_lcore_id(), nb_tx, port_dst, counter);
+//                printf("\nCore %u forwarded %u packets via Port %u for a total of %lu packets\n",
+//				rte_lcore_id(), nb_tx, port_dst, counter);
+
+		for (int i = 0; i<nb_rx; i++)
+		{
+//			rte_pktmbuf_free(bufs[i]);
+		}
         }
 }
 
@@ -299,7 +315,7 @@ main(int argc, char *argv[])
 
         /* Allocates mempool to hold the mbufs. 8< */
         mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
-                MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+                MBUF_CACHE_SIZE, 0, RTE_MBUF_HUGE_SIZE, rte_socket_id());
 
 
         if (mbuf_pool == NULL)
@@ -342,8 +358,8 @@ main(int argc, char *argv[])
         {
                 if(lcore_id <= nb_core)
                         rte_eal_remote_launch(job, &args, lcore_id);
-                //if(lcore_id == 7)
-                //        rte_eal_remote_launch(job_stat, &args, lcore_id);
+                if(lcore_id == 7)
+                        rte_eal_remote_launch(job_stat, &args, lcore_id);
         }
 
 	 rte_eal_mp_wait_lcore();
