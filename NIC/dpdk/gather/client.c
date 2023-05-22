@@ -22,7 +22,7 @@
 #define NUM_PORTS 2
 
 static volatile bool force_quit = false;
-static uint32_t nb_core = 5;            	/* The number of Core working (max 7) */
+static uint32_t nb_core = 7;            	/* The number of Core working (max 7) */
 struct rte_mempool *mbuf_pool;
 
 
@@ -75,6 +75,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	static struct rte_eth_conf port_conf = {
                 .rxmode = {
                         .mq_mode = ETH_MQ_RX_RSS,
+			//.offloads = DEV_RX_OFFLOAD_SCATTER,
                 },
                 .rx_adv_conf = {
                         .rss_conf = {
@@ -84,6 +85,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
                 },
                 .txmode = {
                         .mq_mode = ETH_MQ_TX_NONE,
+			.offloads = DEV_TX_OFFLOAD_MULTI_SEGS,
                 },
         };
 
@@ -166,12 +168,27 @@ job(void* arg)
 	struct rte_mbuf *bufs[BURST_SIZE];
 	struct rte_mbuf *pkt;
 	int pkt_len = 0;
+	int data_len = 0;
 
         for (;;) {
 
 		/* Quit the app on Control+C */
                 if (force_quit)
+		{
+			if(rte_lcore_id() == 1)
+			{
+				// Get port stats
+                		struct rte_eth_stats new_stats;
+                		rte_eth_stats_get(port_src, &new_stats);
+                		// Print stats
+                		printf("\nNumber of received packets : %ld"
+                      		       "\nNumber of missed packets : %ld"
+                       		       "\nNumber of queued RX packets : %ld"
+                       		       "\nNumber of dropped queued packet : %ld\n\n"
+                        		, new_stats.ipackets, new_stats.imissed, new_stats.q_ipackets[0], new_stats.q_errors[0]);
+			}
 			return 0;
+		}
 
                 /* Get burst of RX packets. */
                 const uint16_t nb_rx = rte_eth_rx_burst(port_src, rte_lcore_id() - 1, bufs, BURST_SIZE);
@@ -186,26 +203,37 @@ job(void* arg)
         		return 1;
     		}
 		pkt_len = 0;
+		data_len = 1;
+
+		/* Setup the number of desc in the payload */
+		uint8_t* nb_desc = rte_pktmbuf_mtod(pkt, uint8_t*);
+		*nb_desc = (uint8_t) nb_rx;
+
+		/* set the next field to the first packet */
+		rte_pktmbuf_chain(pkt, bufs[0]);
+		pkt->nb_segs = nb_rx + 1;
 
 		/* Modify the descriptor */
                 for (int i = 0; i < nb_rx; i++) {
 
-			struct descriptor* desc = (struct descriptor*) (rte_pktmbuf_mtod(pkt, char*) + pkt_len);
-			timestamp++;
-			desc->timestamp = timestamp;
+			/* Link all the poackets together */
+			if (i < nb_rx - 1)
+				rte_pktmbuf_chain(bufs[i], bufs[i+1]);
+
+			struct descriptor* desc = (struct descriptor*) (rte_pktmbuf_mtod(pkt, char*) + data_len);
+
+			data_len += sizeof(struct descriptor);
+			pkt_len  += bufs[i]->data_len;
+
 			desc->data_len = bufs[i]->data_len;
+			desc->timestamp = timestamp;
+			timestamp++;
 
-			pkt_len += sizeof(struct descriptor);
-
-			char* payload = rte_pktmbuf_mtod(pkt, char*) + pkt_len;
-			memcpy(payload, bufs[i]->buf_addr, bufs[i]->data_len);
-
-			pkt_len += bufs[i]->data_len;
 
 //printf("desc pos: %ld, timestamp : %d, desc offset : %d, packet len : %d\n",pkt_len-bufs[i]->data_len-sizeof(struct descriptor), timestamp, desc->data_len, pkt_len);
 
                         /* if this is an IPv4 packet */
-
+/*
                         if (RTE_ETH_IS_IPV4_HDR(bufs[i]->packet_type)) {
                                 struct rte_ipv4_hdr *ip_hdr;
 
@@ -213,30 +241,25 @@ job(void* arg)
 				desc->ip_src = rte_be_to_cpu_32(ip_hdr->src_addr);
                         	desc->ip_dst = rte_be_to_cpu_32(ip_hdr->dst_addr);
                         }
-                        else if (RTE_ETH_IS_IPV6_HDR(bufs[i]->packet_type)) {
-                                struct rte_ipv6_hdr *ip_hdr;
-                                ip_hdr = rte_pktmbuf_mtod(bufs[i], struct rte_ipv6_hdr *);
-                        }
                         else{
-                                printf("\nCore %d,IP header doesn't match any type (ipv4 or ipv6)\n", rte_lcore_id());
+                                printf("\nCore %d,IP header doesn't match IPV4 type\n", rte_lcore_id());
                         }
-rte_pktmbuf_free(bufs[i]);
+*/
                 }
 
-		pkt->data_len = pkt_len;
+		pkt_len += data_len;
+		pkt->data_len = data_len;
 		pkt->pkt_len = pkt_len;
 
                 /* Send burst of TX packets, to second port of pair. */
-                const uint16_t nb_tx = rte_eth_tx_burst(port_dst, rte_lcore_id() - 1, &pkt, 1);
+		const uint16_t nb_tx = rte_eth_tx_burst(port_dst, rte_lcore_id() - 1, &pkt, 1);
 
                 counter += nb_tx;
 //                printf("\nCore %u forwarded %u packets via Port %u for a total of %lu packets\n",
 //				rte_lcore_id(), nb_tx, port_dst, counter);
 
-		for (int i = 0; i<nb_rx; i++)
-		{
-//			rte_pktmbuf_free(bufs[i]);
-		}
+		if (nb_tx != 1)
+			rte_pktmbuf_free(pkt);
         }
 }
 
@@ -306,12 +329,12 @@ main(int argc, char *argv[])
         macAddr1.addr_bytes[4]=0xFB;
         macAddr1.addr_bytes[5]=0x2A;
 
-        macAddr2.addr_bytes[0]=0x8A;
-        macAddr2.addr_bytes[1]=0x0D;
-        macAddr2.addr_bytes[2]=0xDE;
-        macAddr2.addr_bytes[3]=0xDF;
-        macAddr2.addr_bytes[4]=0xBA;
-        macAddr2.addr_bytes[5]=0x22;
+        macAddr2.addr_bytes[0]=0x4A;
+        macAddr2.addr_bytes[1]=0xA9;
+        macAddr2.addr_bytes[2]=0x59;
+        macAddr2.addr_bytes[3]=0x46;
+        macAddr2.addr_bytes[4]=0xC5;
+        macAddr2.addr_bytes[5]=0x5C;
 
         /* Allocates mempool to hold the mbufs. 8< */
         mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
@@ -335,12 +358,20 @@ main(int argc, char *argv[])
                         if (port_init(portid, mbuf_pool) != 0)
                                 rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n",portid);
                         port_src = portid;
+
+			char buf[RTE_ETHER_ADDR_FMT_SIZE];
+	                rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, &addr);
+        	        printf("Port %d source : %s\n", port_src, buf);
                 }
 
                 if(memcmp(&addr, &macAddr2, 6) == 0){
                         if (port_init(portid, mbuf_pool) != 0)
                                 rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n",portid);
                         port_dst = portid;
+
+			char buf[RTE_ETHER_ADDR_FMT_SIZE];
+                        rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, &addr);
+                        printf("Port %d destination : %s\n", port_dst, buf);
                 }
         }
         /* >8 End of initializing all ports. */
@@ -351,18 +382,16 @@ main(int argc, char *argv[])
         args.port_src = port_src;
         args.port_dst = port_dst;
 
-	printf("Port : %d as input\nPort : %d as output\n", port_src, port_dst);
-
 	/* MAIN : polling each queue on a lcore */
         RTE_LCORE_FOREACH_WORKER(lcore_id)
         {
                 if(lcore_id <= nb_core)
                         rte_eal_remote_launch(job, &args, lcore_id);
-                if(lcore_id == 7)
-                        rte_eal_remote_launch(job_stat, &args, lcore_id);
+//                if(lcore_id == 7)
+//                        rte_eal_remote_launch(job_stat, &args, lcore_id);
         }
 
-	 rte_eal_mp_wait_lcore();
+	rte_eal_mp_wait_lcore();
 
         /* clean up the EAL */
         rte_eal_cleanup();
