@@ -17,10 +17,10 @@
 
 #define RX_RING_SIZE 1024
 
-#define RTE_MBUF_HUGE_SIZE 10000
+#define RTE_MBUF_HUGE_SIZE 30000
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 4
+#define BURST_SIZE 32
 #define NUM_PORTS 1
 
 static volatile bool force_quit = false;
@@ -42,7 +42,6 @@ struct descriptor
 static inline int
 port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 {
-        struct rte_eth_conf port_conf;
         const uint16_t rx_rings = 1;
         uint16_t nb_rxd = RX_RING_SIZE;
         int retval;
@@ -52,7 +51,18 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
         if (!rte_eth_dev_is_valid_port(port))
                 return -1;
 
-        memset(&port_conf, 0, sizeof(struct rte_eth_conf));
+        static struct rte_eth_conf port_conf = {
+                .rxmode = {
+                        .offloads = RTE_ETH_RX_OFFLOAD_SCATTER,
+                },
+                .txmode = {
+                        .offloads = RTE_ETH_TX_OFFLOAD_MULTI_SEGS,
+                },
+        };
+
+
+//	static struct rte_eth_conf port_conf;
+//        memset(&port_conf, 0, sizeof(struct rte_eth_conf));
 
         retval = rte_eth_dev_info_get(port, &dev_info);
         if (retval != 0) {
@@ -64,6 +74,10 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 
         /* Configure the Ethernet device. */
         retval = rte_eth_dev_configure(port, rx_rings, 0, &port_conf);
+        if (retval != 0)
+                return retval;
+
+        retval = rte_eth_dev_set_mtu(port, 9800);
         if (retval != 0)
                 return retval;
 
@@ -143,57 +157,96 @@ lcore_main(uint16_t port)
                                 "not be optimal.\n", port);
 
 
-        printf("\nCore %u counting incoming packets on port : %d. [Ctrl+C to quit]\n",
-                        rte_lcore_id(), port);
+        printf("\nProcessing incoming packets on port : %d. [Ctrl+C to quit]\n", port);
 
 	uint64_t counter = 0;
+	uint64_t counter_total = 0;
 	uint64_t timestamp = 0;
+	uint64_t nb_byte = 0;
 	uint64_t index;
 	struct descriptor* desc;
+	struct rte_mbuf *bufs[BURST_SIZE];
+
+	uint32_t ip_dst = 0;
+        uint32_t ip_src = 0;
+
+	uint64_t start = 0;
+        uint64_t end = 0;
+	int i;
+
+	struct rte_ipv4_hdr *ip_hdr;
+	uint8_t* nb_desc;
+        uint32_t offset_desc;
+        uint32_t offset_data;
 
         /* Main work of application loop. 8< */
         for (;;) {
 		if(force_quit)
 		{
-			printf("\nReceived %ld packets for a total of %ld\n", counter, timestamp);
+			double time_elapsed = (double) (end-start)/rte_get_tsc_hz();
+			printf("\nReceived %ld packets for a total of %ld packets in %f seconds : throughput : %fGB/s\n"
+				, counter, counter_total, time_elapsed, (nb_byte*8/time_elapsed)/1000000000);
 			return 0;
 		}
                 /* Get burst of RX packets, from first port of pair. */
-                struct rte_mbuf *bufs[BURST_SIZE];
                 const uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
 
                 if (unlikely(nb_rx == 0))
                          continue;
 
-//		printf("pkt_len : %d\n", bufs[0]->pkt_len);
+		if (start == 0)
+                        start = rte_get_tsc_cycles();
 
 		/* Do a small job on each descriptor on the ip field */
 		for (index = 0; index < nb_rx; index ++)
 		{
-			uint64_t offset = 0;
+	                nb_desc = rte_pktmbuf_mtod(bufs[index], uint8_t*);
+			offset_desc = 1;
+			offset_data = *nb_desc * sizeof(struct descriptor) + 2;
 
-			while(offset < bufs[index]->pkt_len)
+//			printf("%d packets received\n", *nb_desc);
+
+			for(i = 0; i < *nb_desc; i++)
 			{
 //				printf("desc pos : %ld ", offset);
-				desc = (struct descriptor*) (rte_pktmbuf_mtod(bufs[index], char*) + offset);
+				desc = (struct descriptor*) (rte_pktmbuf_mtod(bufs[index], char*) + offset_desc);
+
+//				timestamp ++;
+
+				/* if this is an IPv4 packet */
+
+                 	        if (true) {
+                        	        ip_hdr = (struct rte_ipv4_hdr *) (rte_pktmbuf_mtod(bufs[index], void*) + offset_data);
+                                	ip_dst = rte_be_to_cpu_32(ip_hdr->dst_addr);
+                                	ip_src = rte_be_to_cpu_32(ip_hdr->src_addr);
+                        	}
+                        	else{
+                                	printf("\nIP header doesn't match IPV4 type\n");
+                        	}
+
+//				ip_dst = desc->ip_dst;
+//				ip_src = desc->ip_src;
+
+				offset_desc += sizeof(struct descriptor);
+                                offset_data += desc->data_len;
+
+				nb_byte += desc->data_len;
 
 //				printf("timestamp : %ld, ", desc->timestamp);
-				timestamp++;
+//				timestamp++;
 //				printf("len : %d, ", desc->data_len);
-
-
-				offset += sizeof(struct descriptor);
-				offset += desc->data_len;
 
 //				printf("offset : %ld\n", offset);
 			}
 
+			counter_total += *nb_desc;
 			counter++;
 
 	                /* Free all received packets. */
 			rte_pktmbuf_free(bufs[index]);
 		}
 
+		end = rte_get_tsc_cycles();
 //                printf("\nPort %u received %u packets for a total of %lu packets\n", port, nb_rx, counter);
         }
 }
@@ -206,7 +259,6 @@ int
 main(int argc, char *argv[])
 {
         struct rte_mempool *mbuf_pool;
-        unsigned nb_ports = 1;
         uint16_t portid;
         uint16_t port = 99;
 
@@ -230,7 +282,7 @@ main(int argc, char *argv[])
         macAddr1.addr_bytes[5]=0x26;
 
         /* Creates a new mempool in memory to hold the mbufs. */
-        mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
+        mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS,
                 MBUF_CACHE_SIZE, 0, RTE_MBUF_HUGE_SIZE, rte_socket_id());
         if (mbuf_pool == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
@@ -254,11 +306,17 @@ main(int argc, char *argv[])
                         if (port_init(portid, mbuf_pool) != 0)
                                 rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n",portid);
                         port = portid;
+
+		char buf[RTE_ETHER_ADDR_FMT_SIZE];
+                rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, &addr);
+                printf("%s\n", buf);
                 }
         }
 
         if (rte_lcore_count() > 1)
                 printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
+
+	printf("\nListening on port : %d.\n", port);
 
 	/* Handle the Control+C */
         signal(SIGINT, signal_handler);

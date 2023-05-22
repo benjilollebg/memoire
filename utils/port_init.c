@@ -21,16 +21,16 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool, uint8_t nb_core)
 
 	static struct rte_eth_conf port_conf = {
                 .rxmode = {
-                        .mq_mode = ETH_MQ_RX_RSS,
+                        .mq_mode = RTE_ETH_MQ_RX_RSS,
                 },
                 .rx_adv_conf = {
                         .rss_conf = {
                                 .rss_key = NULL,
-                                .rss_hf = ETH_RSS_IP | ETH_RSS_TCP | ETH_RSS_UDP,
+                                .rss_hf = RTE_ETH_RSS_IP | RTE_ETH_RSS_TCP | RTE_ETH_RSS_UDP,
                         },
                 },
                 .txmode = {
-                        .mq_mode = ETH_MQ_TX_NONE,
+                        .mq_mode = RTE_ETH_MQ_TX_NONE,
                 },
         };
 

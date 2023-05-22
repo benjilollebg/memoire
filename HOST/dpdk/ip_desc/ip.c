@@ -19,7 +19,7 @@
 
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 256
+#define BURST_SIZE 32
 #define NUM_PORTS 1
 
 static volatile bool force_quit = false;
@@ -140,19 +140,34 @@ lcore_main(uint16_t port)
 
 	int counter = 0;
 	int index;
+	uint64_t start = 0;
+	uint64_t end = 0;
+	uint64_t nb_byte = 0;
+
+        struct rte_mbuf *bufs[BURST_SIZE];
+        struct rte_ipv4_hdr *ip_hdr;
+        uint32_t ip_dst = 0;
+        uint32_t ip_src = 0;
+
         /* Main work of application loop. 8< */
         for (;;) {
 		if(force_quit)
 		{
-			printf("\nReceived a total of %d packets\n", counter);
+			double time_elapsed = (double) (end-start)/rte_get_tsc_hz();
+                        printf("\nReceived %d packets in %f seconds : throughput : %fGB/s\n"
+                                , counter, time_elapsed, (nb_byte*8/time_elapsed)/1000000000);
+
+			printf("\nReceived a total of %d packets in %f seconds\n", counter, (double) (end-start)/rte_get_tsc_hz());
 			return 0;
 		}
                 /* Get burst of RX packets, from first port of pair. */
-                struct rte_mbuf *bufs[BURST_SIZE];
                 const uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
 
                 if (unlikely(nb_rx == 0))
                          continue;
+
+		if (start == 0)
+			start = rte_get_tsc_cycles();
 
                 port_stats += nb_rx;
 
@@ -160,27 +175,18 @@ lcore_main(uint16_t port)
 		for (index = 0; index < nb_rx; index ++)
 		{
 			counter ++;
+			nb_byte += bufs[index]->data_len;
 
 			/* if this is an IPv4 packet */
 			if (RTE_ETH_IS_IPV4_HDR(bufs[index]->packet_type)) {
-				struct rte_ipv4_hdr *ip_hdr;
-        			uint32_t ip_dst = 0;
-				uint32_t ip_src = 0;
-
         			ip_hdr = rte_pktmbuf_mtod(bufs[index], struct rte_ipv4_hdr *);
         			ip_dst = rte_be_to_cpu_32(ip_hdr->dst_addr);
 				ip_src = rte_be_to_cpu_32(ip_hdr->src_addr);
 
 //				printf("\nReceived an IPv4 packet from %d for a total of %d packets\n", ip_src, counter);
 		        }
-			else if (RTE_ETH_IS_IPV6_HDR(bufs[index]->packet_type)) {
-        			struct rte_ipv6_hdr *ip_hdr;
-        			ip_hdr = rte_pktmbuf_mtod(bufs[index], struct rte_ipv6_hdr *);
-
-//				printf("\nReceived an IPv6 packet from %hhn for a total of %d packets\n", ip_hdr->src_addr, counter);
-		        }
 			else{
-				printf("\nIP header doesn't match any type (ipv4 or ipv6)\n");
+				printf("\nIP header doesn't match IPV4 type\n");
 			}
 		}
 
@@ -190,6 +196,7 @@ lcore_main(uint16_t port)
 		for (index = 0; index < nb_rx; index ++)
                         rte_pktmbuf_free(bufs[index]);
 
+		end = rte_get_tsc_cycles();
         }
 }
 
