@@ -17,6 +17,7 @@
 
 #define RX_RING_SIZE 1024
 
+#define RTE_MBUF_HUGE_SIZE 10000
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 4
@@ -24,11 +25,12 @@
 
 static volatile bool force_quit = false;
 
-struct __attribute__((aligned(64))) descriptor
+struct descriptor
 {
         volatile uint32_t       ip_src;
         volatile uint32_t       ip_dst;
         volatile uint64_t       timestamp;
+        volatile uint32_t       data_len;
 };
 
 /*
@@ -129,7 +131,6 @@ signal_handler(int signum)
 static int
 lcore_main(uint16_t port)
 {
-        uint64_t port_stats = 0;
 
         /*
          * Check that the port is on the same NUMA node as the polling thread
@@ -142,17 +143,19 @@ lcore_main(uint16_t port)
                                 "not be optimal.\n", port);
 
 
-        printf("\nCore %u counting incoming packets. [Ctrl+C to quit]\n",
-                        rte_lcore_id());
+        printf("\nCore %u counting incoming packets on port : %d. [Ctrl+C to quit]\n",
+                        rte_lcore_id(), port);
 
 	uint64_t counter = 0;
 	uint64_t timestamp = 0;
 	uint64_t index;
+	struct descriptor* desc;
+
         /* Main work of application loop. 8< */
         for (;;) {
 		if(force_quit)
 		{
-			printf("\nReceived a total of %ld packets\n", counter);
+			printf("\nReceived %ld packets for a total of %ld\n", counter, timestamp);
 			return 0;
 		}
                 /* Get burst of RX packets, from first port of pair. */
@@ -162,22 +165,36 @@ lcore_main(uint16_t port)
                 if (unlikely(nb_rx == 0))
                          continue;
 
-                port_stats += nb_rx;
+//		printf("pkt_len : %d\n", bufs[0]->pkt_len);
 
 		/* Do a small job on each descriptor on the ip field */
 		for (index = 0; index < nb_rx; index ++)
 		{
-			counter ++;
-			struct descriptor* desc = bufs[index]->buf_addr;
-			printf("timestamp : %ld\n", desc->timestamp);
+			uint64_t offset = 0;
+
+			while(offset < bufs[index]->pkt_len)
+			{
+//				printf("desc pos : %ld ", offset);
+				desc = (struct descriptor*) (rte_pktmbuf_mtod(bufs[index], char*) + offset);
+
+//				printf("timestamp : %ld, ", desc->timestamp);
+				timestamp++;
+//				printf("len : %d, ", desc->data_len);
+
+
+				offset += sizeof(struct descriptor);
+				offset += desc->data_len;
+
+//				printf("offset : %ld\n", offset);
+			}
+
+			counter++;
+
+	                /* Free all received packets. */
+			rte_pktmbuf_free(bufs[index]);
 		}
 
-//                printf("\nPort %u received %u packets for a total of %lu packets\n", port, nb_rx, port_stats);
-
-                /* Free all received packets. */
-		for (index = 0; index < nb_rx; index ++)
-                        rte_pktmbuf_free(bufs[index]);
-
+//                printf("\nPort %u received %u packets for a total of %lu packets\n", port, nb_rx, counter);
         }
 }
 
@@ -214,7 +231,7 @@ main(int argc, char *argv[])
 
         /* Creates a new mempool in memory to hold the mbufs. */
         mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
-                MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+                MBUF_CACHE_SIZE, 0, RTE_MBUF_HUGE_SIZE, rte_socket_id());
         if (mbuf_pool == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
@@ -231,7 +248,7 @@ main(int argc, char *argv[])
     		rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, &addr);
     		printf("%s\n", buf);
 */
-		printf( "coucou\n");
+
                 /* Only init the two desired port (depending on the specified MAC address) */
                 if(memcmp(&addr, &macAddr1, 6) == 0){
                         if (port_init(portid, mbuf_pool) != 0)

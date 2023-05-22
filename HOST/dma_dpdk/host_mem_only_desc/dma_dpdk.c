@@ -42,7 +42,7 @@
 
 #define IP "192.168.100.2"
 #define PORT 6660
-#define PCIE_ADDR "01:00.1"
+#define PCIE_ADDR "51:00.0"
 
 
 //#define debug printf
@@ -58,9 +58,10 @@ struct __attribute__((aligned(64))) descriptor
 	volatile uint32_t       ip_dst;
 	volatile uint64_t       timestamp;
 	volatile bool           full;
+	char empty [64];
 };
 
-static uint32_t nb_core = 2;            /* The number of Core working on the NIC (max 7) */
+static uint32_t nb_core = 1;            /* The number of Core working on the NIC (max 7) */
 static volatile bool force_quit = false;
 
 static void

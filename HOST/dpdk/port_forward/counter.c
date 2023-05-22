@@ -13,8 +13,6 @@
 #include <rte_byteorder.h>
 #include <signal.h>
 
-#include <../../../utils/port_init.h>
-
 #define RX_RING_SIZE 1024
 
 #define NUM_MBUFS 8191
@@ -144,7 +142,10 @@ lcore_main(uint16_t port)
         /* Main work of application loop. 8< */
         for (;;) {
 		if(force_quit)
+		{
+	                printf("\nPort %u received a total of %lu packets\n", port, port_stats);
                         return 0;
+		}
 
                 /* Get burst of RX packets, from first port of pair. */
                 struct rte_mbuf *bufs[BURST_SIZE];
@@ -162,7 +163,6 @@ lcore_main(uint16_t port)
 			printf("\nReceived a total of %d packets\n", counter);
 		}
 */
-                printf("\nPort %u received %u packets for a total of %lu packets\n", port, nb_rx, port_stats);
 
                 /* Free any unsent packets. */
 		for (index = 0; index < nb_rx; index ++)
