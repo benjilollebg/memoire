@@ -21,7 +21,7 @@
 #define NUM_PORTS 2
 
 static volatile bool force_quit = false;
-static uint32_t nb_core = 2;            	/* The number of Core working (max 7) */
+static uint32_t nb_core = 6;            	/* The number of Core working (max 7) */
 
 
 struct arguments
@@ -167,9 +167,8 @@ job(void* arg)
                         continue;
 
 		/* Modify the descriptor */
-                for (int i = 0; i < nb_rx; i++) {
+/*                for (int i = 0; i < nb_rx; i++) {
 
-                        /* if this is an IPv4 packet */
                         if (RTE_ETH_IS_IPV4_HDR(bufs[i]->packet_type)) {
                                 struct rte_ipv4_hdr *ip_hdr;
                                 uint32_t ip_dst = 0;
@@ -188,13 +187,13 @@ job(void* arg)
                         }
 
                 }
-
+*/
                 /* Send burst of TX packets, to second port of pair. */
                 const uint16_t nb_tx = rte_eth_tx_burst(port_dst, rte_lcore_id() - 1, bufs, nb_rx);
 
                 port_stats += nb_tx;
-                printf("\nCore %u forwarded %u packets via Port %u for a total of %lu packets\n",
-                               rte_lcore_id(), nb_tx, port_dst, port_stats);
+//                printf("\nCore %u forwarded %u packets via Port %u for a total of %lu packets\n",
+  //                             rte_lcore_id(), nb_tx, port_dst, port_stats);
 
                 /* Free any unsent packets. */
                 if (unlikely(nb_tx < nb_rx)) {
@@ -272,12 +271,12 @@ main(int argc, char *argv[])
         macAddr1.addr_bytes[4]=0xFB;
         macAddr1.addr_bytes[5]=0x2A;
 
-        macAddr2.addr_bytes[0]=0x16;
-        macAddr2.addr_bytes[1]=0x7F;
-        macAddr2.addr_bytes[2]=0x7D;
-        macAddr2.addr_bytes[3]=0x47;
-        macAddr2.addr_bytes[4]=0x5D;
-        macAddr2.addr_bytes[5]=0x3C;
+        macAddr2.addr_bytes[0]=0x4A;
+        macAddr2.addr_bytes[1]=0xA9;
+        macAddr2.addr_bytes[2]=0x59;
+        macAddr2.addr_bytes[3]=0x46;
+        macAddr2.addr_bytes[4]=0xC5;
+        macAddr2.addr_bytes[5]=0x5C;
 
         /* Allocates mempool to hold the mbufs. 8< */
         mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
