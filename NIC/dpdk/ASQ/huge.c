@@ -12,12 +12,12 @@
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
 
-#define RX_RING_SIZE 1024
-#define TX_RING_SIZE 1024
+#define RX_RING_SIZE 512
+#define TX_RING_SIZE 512
 
 #define RTE_MBUF_HUGE_SIZE 10000
 #define NUM_MBUFS 8191
-#define MBUF_CACHE_SIZE 250
+#define MBUF_CACHE_SIZE 32
 #define BURST_SIZE 32
 #define NUM_PORTS 2
 
@@ -108,7 +108,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
         /* Allocate and set up 1 RX queue per Ethernet port. */
         for (q = 0; q < rx_rings; q++) {
                 retval = rte_eth_rx_queue_setup(port, q, nb_rxd,
-                                rte_eth_dev_socket_id(port), NULL, mbuf_pool);
+                                SOCKET_ID_ANY, NULL, mbuf_pool);
                 if (retval < 0)
                         return retval;
         }
@@ -118,7 +118,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
         /* Allocate and set up 1 TX queue per Ethernet port. */
         for (q = 0; q < tx_rings; q++) {
                 retval = rte_eth_tx_queue_setup(port, q, nb_txd,
-                                rte_eth_dev_socket_id(port), &txconf);
+                                SOCKET_ID_ANY, &txconf);
                 if (retval < 0)
                         return retval;
         }
@@ -207,11 +207,11 @@ job(void* arg)
 
 		/* Setup the number of desc in the payload */
 		uint8_t* nb_desc = rte_pktmbuf_mtod(pkt, uint8_t*);
-		*nb_desc = (uint8_t) nb_rx;
+		uint8_t NB_DESC = 0;
 
 		/* set the next field to the first packet */
 		rte_pktmbuf_chain(pkt, bufs[0]);
-		pkt->nb_segs = nb_rx + 1;
+		pkt->nb_segs = 1;
 
 		/* Modify the descriptor */
                 for (int i = 0; i < nb_rx; i++) {
@@ -219,15 +219,56 @@ job(void* arg)
 			/* Link all the poackets together */
 			if (i < nb_rx - 1)
 				rte_pktmbuf_chain(bufs[i], bufs[i+1]);
+			pkt->nb_segs = pkt->nb_segs + 1;
 
+			NB_DESC++;
 			struct descriptor* desc = (struct descriptor*) (rte_pktmbuf_mtod(pkt, char*) + data_len);
 
 			data_len += sizeof(struct descriptor);
 			pkt_len  += bufs[i]->data_len;
 
 			desc->data_len = bufs[i]->data_len;
-			desc->timestamp = timestamp;
-			timestamp++;
+			//desc->timestamp = timestamp;
+			//timestamp++;
+
+//			if(pkt_len > 8000 && i != nb_rx-1)
+			if(i%32 ==0 && i != nb_rx-1)
+			{
+				pkt_len += data_len;
+                		pkt->data_len = data_len;
+                		pkt->pkt_len = pkt_len;
+
+				*nb_desc = (uint8_t) NB_DESC;
+
+				/* Send burst of TX packets, to second port of pair. */
+                		const uint16_t nb_tx = rte_eth_tx_burst(port_dst, rte_lcore_id() - 1, &pkt, 1);
+                		counter += NB_DESC;
+/*
+				if(nb_tx == 1)
+					printf("\nCore %u forwarded %u packets cause no more room for a total of %lu packets\n",
+                                		rte_lcore_id(), NB_DESC, counter);
+*/
+				if (nb_tx != 1)
+                        		rte_pktmbuf_free(pkt);
+
+			 	/* Allocate the packet in the mbuf_pool */
+                		pkt = rte_pktmbuf_alloc(mbuf_pool);
+                		if (pkt == NULL) {
+                        		printf("Failed to allocate mbuf\n");
+                        		return 1;
+                		}
+                		pkt_len = 0;
+                		data_len = 1;
+
+                		/* Setup the number of desc in the payload */
+                		nb_desc = rte_pktmbuf_mtod(pkt, uint8_t*);
+                		NB_DESC = 0;
+
+                		/* set the next field to the first packet */
+                		rte_pktmbuf_chain(pkt, bufs[i+1]);
+                		pkt->nb_segs = 1;
+			}
+
 
 
 //printf("desc pos: %ld, timestamp : %d, desc offset : %d, packet len : %d\n",pkt_len-bufs[i]->data_len-sizeof(struct descriptor), timestamp, desc->data_len, pkt_len);
@@ -251,12 +292,13 @@ job(void* arg)
 		pkt->data_len = data_len;
 		pkt->pkt_len = pkt_len;
 
+		*nb_desc = (uint8_t) NB_DESC;
                 /* Send burst of TX packets, to second port of pair. */
 		const uint16_t nb_tx = rte_eth_tx_burst(port_dst, rte_lcore_id() - 1, &pkt, 1);
 
-                counter += nb_tx;
+                counter += NB_DESC;
 //                printf("\nCore %u forwarded %u packets via Port %u for a total of %lu packets\n",
-//				rte_lcore_id(), nb_tx, port_dst, counter);
+//				rte_lcore_id(), NB_DESC, port_dst, counter);
 
 		if (nb_tx != 1)
 			rte_pktmbuf_free(pkt);
@@ -337,8 +379,8 @@ main(int argc, char *argv[])
         macAddr2.addr_bytes[5]=0x5C;
 
         /* Allocates mempool to hold the mbufs. 8< */
-        mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
-                MBUF_CACHE_SIZE, 0, RTE_MBUF_HUGE_SIZE, rte_socket_id());
+        mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS,
+                MBUF_CACHE_SIZE, 0,  RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 
 
         if (mbuf_pool == NULL)

@@ -28,6 +28,8 @@ dependencies += dependency('libdpdk')
 srcs = [
         # The sample itself
         'client.c',
+	# To chech correct format of MAC address
+        '../../../utils/MACaddress.c',
 ]
 
 executable('client', srcs,
