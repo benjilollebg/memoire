@@ -17,21 +17,12 @@
 
 #define RX_RING_SIZE 1024
 
-#define RTE_MBUF_HUGE_SIZE 10000
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 4
+#define BURST_SIZE 32
 #define NUM_PORTS 1
 
 static volatile bool force_quit = false;
-
-struct descriptor
-{
-        volatile uint32_t       ip_src;
-        volatile uint32_t       ip_dst;
-        volatile uint64_t       timestamp;
-        volatile uint32_t       data_len;
-};
 
 /*
  * Initializes a given port using global settings and with the RX buffers
@@ -127,10 +118,18 @@ signal_handler(int signum)
  * an input port and writing to an output port.
  */
 
- /* Basic forwarding application lcore.*/
+ /* Basic forwarding application lcore. 8< */
 static int
 lcore_main(uint16_t port)
 {
+        uint64_t port_stats = 0;
+
+	FILE *fp;
+        fp = fopen("data.csv", "a");
+        if(fp == NULL) {
+                printf("file can't be opened\n");
+                return 1;
+        }
 
         /*
          * Check that the port is on the same NUMA node as the polling thread
@@ -143,58 +142,94 @@ lcore_main(uint16_t port)
                                 "not be optimal.\n", port);
 
 
-        printf("\nCore %u counting incoming packets on port : %d. [Ctrl+C to quit]\n",
-                        rte_lcore_id(), port);
+        printf("\nCore %u counting incoming packets. [Ctrl+C to quit]\n",
+                        rte_lcore_id());
 
-	uint64_t counter = 0;
-	uint64_t timestamp = 0;
-	uint64_t index;
-	struct descriptor* desc;
+	int counter = 0;
+	int index;
+	uint64_t start = 0;
+	uint64_t end = 0;
+	uint64_t nb_byte = 0;
+
+        struct rte_mbuf *bufs[BURST_SIZE];
+        struct rte_ipv4_hdr *ip_hdr;
+        uint32_t ip_dst = 0;
+        uint32_t ip_src = 0;
+
+	uint64_t start_cycle = 0;
+        uint64_t end_cycle = 0;
+        uint64_t rte_burst = 0;
+	uint64_t miss_rte_burst = 0;
+        uint64_t pkt_analysis = 0;
 
         /* Main work of application loop. 8< */
         for (;;) {
 		if(force_quit)
 		{
-			printf("\nReceived %ld packets for a total of %ld\n", counter, timestamp);
+			double time_elapsed = (double) (end-start)/rte_get_tsc_hz();
+                        printf("\nReceived %d packets in %f seconds : throughput : %fGB/s\n"
+				"rte_burst cycle : %ld, pkt_analysis cycle : %ld\n"
+                                , counter, time_elapsed, (nb_byte*8/time_elapsed)/1000000000, rte_burst, pkt_analysis);
+
+			printf("\nReceived a total of %d packets in %f seconds\n", counter, (double) (end-start)/rte_get_tsc_hz());
+
+
+			fprintf(fp, "%ld, %ld, %f, %f, %ld, %ld, %f, %f\n"
+                                , counter, counter, time_elapsed, (nb_byte*8/time_elapsed)/1000000000,
+                                  rte_burst, pkt_analysis, counter/time_elapsed/1000000, counter/time_elapsed/1000000);
+                        fclose(fp);
+
 			return 0;
 		}
+
+		start_cycle = rte_get_tsc_cycles();
                 /* Get burst of RX packets, from first port of pair. */
-                struct rte_mbuf *bufs[BURST_SIZE];
                 const uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
 
-                if (unlikely(nb_rx == 0))
-                         continue;
+                if (nb_rx == 0)
+                        continue;
 
-//		printf("pkt_len : %d\n", bufs[0]->pkt_len);
+                end_cycle = rte_get_tsc_cycles();
+                rte_burst += (end_cycle-start_cycle);
 
+		if (start == 0)
+			start = rte_get_tsc_cycles();
+
+                port_stats += nb_rx;
+
+		start_cycle = rte_get_tsc_cycles();
 		/* Do a small job on each descriptor on the ip field */
 		for (index = 0; index < nb_rx; index ++)
 		{
-			uint64_t offset = 0;
+			counter ++;
+			nb_byte += bufs[index]->data_len;
 
-			while(offset < bufs[index]->pkt_len)
-			{
-//				printf("desc pos : %ld ", offset);
-				desc = (struct descriptor*) (rte_pktmbuf_mtod(bufs[index], char*) + offset);
+			/* if this is an IPv4 packet */
 
-//				printf("timestamp : %ld, ", desc->timestamp);
-				timestamp++;
-//				printf("len : %d, ", desc->data_len);
+			if (RTE_ETH_IS_IPV4_HDR(bufs[index]->packet_type)) {
+        			ip_hdr = rte_pktmbuf_mtod(bufs[index], struct rte_ipv4_hdr *);
+        			ip_dst = rte_be_to_cpu_32(ip_hdr->dst_addr);
+				ip_src = rte_be_to_cpu_32(ip_hdr->src_addr);
 
-
-				offset += sizeof(struct descriptor);
-				offset += desc->data_len;
-
-//				printf("offset : %ld\n", offset);
+//				printf("\nReceived an IPv4 packet from %d for a total of %d packets\n", ip_src, counter);
+		        }
+			else{
+				printf("\nIP header doesn't match IPV4 type\n");
 			}
 
-			counter++;
-
-	                /* Free all received packets. */
 			rte_pktmbuf_free(bufs[index]);
 		}
 
-//                printf("\nPort %u received %u packets for a total of %lu packets\n", port, nb_rx, counter);
+//                printf("\nPort %u received %u packets for a total of %lu packets\n", port, nb_rx, port_stats);
+
+                /* Free all received packets. */
+		//for (index = 0; index < nb_rx; index ++)
+                        //rte_pktmbuf_free(bufs[index]);
+
+		end_cycle = rte_get_tsc_cycles();
+                pkt_analysis += (end_cycle-start_cycle);
+
+		end = rte_get_tsc_cycles();
         }
 }
 
@@ -208,7 +243,7 @@ main(int argc, char *argv[])
         struct rte_mempool *mbuf_pool;
         unsigned nb_ports = 1;
         uint16_t portid;
-        uint16_t port = 99;
+        uint16_t port;
 
         /* Initializion the Environment Abstraction Layer (EAL). 8< */
         int ret = rte_eal_init(argc, argv);
@@ -231,7 +266,7 @@ main(int argc, char *argv[])
 
         /* Creates a new mempool in memory to hold the mbufs. */
         mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
-                MBUF_CACHE_SIZE, 0, RTE_MBUF_HUGE_SIZE, rte_socket_id());
+                MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
         if (mbuf_pool == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
@@ -243,11 +278,6 @@ main(int argc, char *argv[])
                 int retval = rte_eth_macaddr_get(portid, &addr);
                 if (retval != 0)
                         return retval;
-/*
-		char buf[RTE_ETHER_ADDR_FMT_SIZE];
-    		rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, &addr);
-    		printf("%s\n", buf);
-*/
 
                 /* Only init the two desired port (depending on the specified MAC address) */
                 if(memcmp(&addr, &macAddr1, 6) == 0){
