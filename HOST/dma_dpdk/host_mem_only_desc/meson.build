@@ -24,14 +24,10 @@ add_project_arguments('-D DOCA_ALLOW_EXPERIMENTAL_API', language: ['c', 'cpp'])
 
 dependencies = []
 # Required for all DOCA programs
-dependencies += dependency('doca-common')
-# Library needed for this sample
-dependencies += dependency('doca-dma')
-# Library used by the main() function
-dependencies += dependency('doca-argp')
+dependencies += dependency('doca')
 # Library used by the main() function
 dependencies += dependency('libbsd')
-#
+# 
 dependencies += dependency('libdpdk')
 
 srcs = [
@@ -43,6 +39,7 @@ srcs = [
         '/opt/mellanox/doca/samples/common.c',
         # Common code for all DOCA applications
         '/opt/mellanox/doca/applications/common/src/utils.c',
+        '/opt/mellanox/doca/applications/common/src/doca_utils.c',
 ]
 
 inc_dirs  = []

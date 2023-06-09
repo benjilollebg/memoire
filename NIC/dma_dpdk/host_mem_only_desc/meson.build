@@ -24,11 +24,7 @@ add_project_arguments('-D DOCA_ALLOW_EXPERIMENTAL_API', language: ['c', 'cpp'])
 
 dependencies = []
 # Required for all DOCA programs
-dependencies += dependency('doca-common')
-# Library needed for this sample
-dependencies += dependency('doca-dma')
-# Library used by the main() function
-dependencies += dependency('doca-argp')
+dependencies += dependency('doca')
 # Library used by the main() function
 dependencies += dependency('libbsd')
 # 
@@ -36,13 +32,14 @@ dependencies += dependency('libdpdk')
 
 srcs = [
         # The sample itself
-        'only_dma.c',
+        'dma_dpdk.c',
         # Common code for the DOCA library samples
         '/opt/mellanox/doca/samples/doca_dma/dma_common.c',
         # Common code for all DOCA samples
         '/opt/mellanox/doca/samples/common.c',
         # Common code for all DOCA applications
         '/opt/mellanox/doca/applications/common/src/utils.c',
+        '/opt/mellanox/doca/applications/common/src/doca_utils.c',
 	#
 	'../../../utils/set_dma_buffer.c',
 	'../../../utils/port_init.c',
